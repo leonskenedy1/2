@@ -1,4 +1,4 @@
-name: Fetch file and push split zip to repo
+name: Fetch file and push split zip to repo (parts < 100 MB)
 
 on:
   workflow_dispatch:
@@ -21,29 +21,23 @@ jobs:
           cd temp_download
           wget --progress=bar:force --content-disposition "${{ github.event.inputs.url }}"
 
-      - name: Create zip (single or multi-part) in downloads folder
+      - name: Create split zip archive (each part ≤ 95 MB)
         run: |
           mkdir -p downloads
           cd temp_download
           FILE=$(ls -1)
           cd ..
-          SIZE=$(stat -c%s "temp_download/${FILE}")
-          if [ $SIZE -gt 536870912 ]; then
-            echo "File larger than 512 MiB, splitting into multi-part zip..."
-            zip -s 512M -r "downloads/${FILE}.zip" "temp_download/${FILE}"
-          else
-            echo "Small file, single zip archive."
-            zip "downloads/${FILE}.zip" "temp_download/${FILE}"
-          fi
+          zip -s 95m -r "downloads/${FILE}.zip" "temp_download/${FILE}"
 
-      - name: Commit and push files to repository
+      - name: Commit and push parts to repository
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+          git config http.postBuffer 524288000
           git add downloads/
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Add downloaded file [skip ci]"
+            git commit -m "Add downloaded file parts [skip ci]"
             git push
           fi
