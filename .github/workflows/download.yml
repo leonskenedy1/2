@@ -1,4 +1,4 @@
-name: Fetch file from direct link (split if >512MiB)
+name: Fetch file and push split zip to repo
 
 on:
   workflow_dispatch:
@@ -11,29 +11,39 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - name: Download file using wget (quiet, bar progress)
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Download file to temporary location
         run: |
-          mkdir -p download
-          cd download
+          mkdir -p temp_download
+          cd temp_download
           wget --progress=bar:force --content-disposition "${{ github.event.inputs.url }}"
 
-      - name: Split file if larger than 512 MiB
+      - name: Create zip (single or multi-part) in downloads folder
         run: |
-          cd download
+          mkdir -p downloads
+          cd temp_download
           FILE=$(ls -1)
-          SIZE=$(stat -c%s "$FILE")
+          cd ..
+          SIZE=$(stat -c%s "temp_download/${FILE}")
           if [ $SIZE -gt 536870912 ]; then
-            echo "File is larger than 512 MiB, splitting into parts..."
-            split -d -b 512M "$FILE" "${FILE}."
-            rm "$FILE"
+            echo "File larger than 512 MiB, splitting into multi-part zip..."
+            zip -s 512M -r "downloads/${FILE}.zip" "temp_download/${FILE}"
           else
-            echo "File is small enough, no splitting needed."
+            echo "Small file, single zip archive."
+            zip "downloads/${FILE}.zip" "temp_download/${FILE}"
           fi
 
-      - name: Upload file(s) to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: download/*
-          tag_name: file_${{ github.run_number }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit and push files to repository
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add downloads/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add downloaded file [skip ci]"
+            git push
+          fi
