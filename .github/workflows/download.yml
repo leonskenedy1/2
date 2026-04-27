@@ -1,4 +1,4 @@
-name: Fetch file and push split zip to repo (parts < 100 MB)
+name: Fetch file and commit split zip via API (no push limit)
 
 on:
   workflow_dispatch:
@@ -12,32 +12,66 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Download file to temporary location
+      - name: Download file
         run: |
           mkdir -p temp_download
           cd temp_download
           wget --progress=bar:force --content-disposition "${{ github.event.inputs.url }}"
 
-      - name: Create split zip archive (each part ≤ 95 MB)
+      - name: Create split zip (parts ≤ 95 MB)
         run: |
-          mkdir -p downloads
           cd temp_download
           FILE=$(ls -1)
           cd ..
+          mkdir -p downloads
           zip -s 95m -r "downloads/${FILE}.zip" "temp_download/${FILE}"
 
-      - name: Commit and push parts to repository
+      - name: Upload parts via GitHub API (skips push limit)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git config http.postBuffer 524288000
-          git add downloads/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Add downloaded file parts [skip ci]"
-            git push
-          fi
+          REPO="${{ env.REPO }}"
+          BRANCH="${BRANCH:-main}"
+          
+          # 1. Get current commit SHA and its tree SHA
+          COMMIT_DATA=$(gh api "repos/$REPO/branches/$BRANCH" --jq '.commit.sha, .commit.commit.tree.sha')
+          LATEST_COMMIT_SHA=$(echo "$COMMIT_DATA" | sed -n '1p')
+          BASE_TREE_SHA=$(echo "$COMMIT_DATA" | sed -n '2p')
+
+          # 2. For each part, create a blob and collect entry
+          ENTRIES="["
+          FIRST=true
+          for f in downloads/*; do
+            filename=$(basename "$f")
+            BLOB_SHA=$(gh api "repos/$REPO/git/blobs" --input "$f" --jq '.sha')
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
+              ENTRIES+=","
+            fi
+            ENTRIES+="{\"path\":\"downloads/$filename\",\"mode\":\"100644\",\"type\":\"blob\",\"sha\":\"$BLOB_SHA\"}"
+          done
+          ENTRIES+="]"
+
+          # 3. Create a new tree based on the latest tree with our new entries
+          NEW_TREE_SHA=$(gh api "repos/$REPO/git/trees" \
+            -f base_tree="$BASE_TREE_SHA" \
+            -f tree="$ENTRIES" \
+            --jq '.sha')
+
+          # 4. Create a commit pointing to the new tree
+          NEW_COMMIT_SHA=$(gh api "repos/$REPO/git/commits" \
+            -f message="Add downloaded file parts" \
+            -f tree="$NEW_TREE_SHA" \
+            -f parents[]="$LATEST_COMMIT_SHA" \
+            --jq '.sha')
+
+          # 5. Update branch reference
+          gh api "repos/$REPO/git/refs/heads/$BRANCH" \
+            -X PATCH \
+            -f sha="$NEW_COMMIT_SHA"
+
+          echo "Upload complete. Files are in the 'downloads' folder."
