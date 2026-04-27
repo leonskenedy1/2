@@ -1,4 +1,4 @@
-name: Fetch file from direct link
+name: Fetch file from direct link (split if >512MiB)
 
 on:
   workflow_dispatch:
@@ -11,13 +11,26 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - name: Download file using wget
+      - name: Download file using wget (quiet, bar progress)
         run: |
           mkdir -p download
           cd download
-          wget --content-disposition "${{ github.event.inputs.url }}"
+          wget --progress=bar:force --content-disposition "${{ github.event.inputs.url }}"
 
-      - name: Upload file to Release
+      - name: Split file if larger than 512 MiB
+        run: |
+          cd download
+          FILE=$(ls -1)
+          SIZE=$(stat -c%s "$FILE")
+          if [ $SIZE -gt 536870912 ]; then
+            echo "File is larger than 512 MiB, splitting into parts..."
+            split -d -b 512M "$FILE" "${FILE}."
+            rm "$FILE"
+          else
+            echo "File is small enough, no splitting needed."
+          fi
+
+      - name: Upload file(s) to Release
         uses: softprops/action-gh-release@v2
         with:
           files: download/*
