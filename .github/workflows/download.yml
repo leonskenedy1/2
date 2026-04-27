@@ -1,4 +1,4 @@
-name: Fetch file and commit split zip via API (no push limit)
+name: Fetch file and commit split zip via API (fixed blob)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
           mkdir -p downloads
           zip -s 95m -r "downloads/${FILE}.zip" "temp_download/${FILE}"
 
-      - name: Upload parts via GitHub API (skips push limit)
+      - name: Upload parts via GitHub API (no push limit)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -35,18 +35,24 @@ jobs:
         run: |
           REPO="${{ env.REPO }}"
           BRANCH="${BRANCH:-main}"
-          
-          # 1. Get current commit SHA and its tree SHA
+
+          # Get latest commit and tree SHA
           COMMIT_DATA=$(gh api "repos/$REPO/branches/$BRANCH" --jq '.commit.sha, .commit.commit.tree.sha')
           LATEST_COMMIT_SHA=$(echo "$COMMIT_DATA" | sed -n '1p')
           BASE_TREE_SHA=$(echo "$COMMIT_DATA" | sed -n '2p')
 
-          # 2. For each part, create a blob and collect entry
+          # Build tree entries
           ENTRIES="["
           FIRST=true
           for f in downloads/*; do
             filename=$(basename "$f")
-            BLOB_SHA=$(gh api "repos/$REPO/git/blobs" --input "$f" --jq '.sha')
+            # Create blob using proper JSON with base64 content (streamed, no variable storage)
+            BLOB_SHA=$(
+              jq -n --rawfile content <(base64 -w0 "$f") \
+                 --arg encoding "base64" \
+                 '{content: $content, encoding: $encoding}' \
+              | gh api "repos/$REPO/git/blobs" --input - --jq '.sha'
+            )
             if [ "$FIRST" = true ]; then
               FIRST=false
             else
@@ -56,20 +62,20 @@ jobs:
           done
           ENTRIES+="]"
 
-          # 3. Create a new tree based on the latest tree with our new entries
+          # Create new tree
           NEW_TREE_SHA=$(gh api "repos/$REPO/git/trees" \
             -f base_tree="$BASE_TREE_SHA" \
             -f tree="$ENTRIES" \
             --jq '.sha')
 
-          # 4. Create a commit pointing to the new tree
+          # Create commit
           NEW_COMMIT_SHA=$(gh api "repos/$REPO/git/commits" \
             -f message="Add downloaded file parts" \
             -f tree="$NEW_TREE_SHA" \
             -f parents[]="$LATEST_COMMIT_SHA" \
             --jq '.sha')
 
-          # 5. Update branch reference
+          # Update branch reference
           gh api "repos/$REPO/git/refs/heads/$BRANCH" \
             -X PATCH \
             -f sha="$NEW_COMMIT_SHA"
