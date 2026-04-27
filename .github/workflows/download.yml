@@ -1,0 +1,26 @@
+name: https://dl.iamworker.com/s29/v5/download/n687zlTtQSQ/1759169154244882/22fe271e9777377bcae8792612a580f8?token=1777246869_de54befb799f84ca209fc13728b294c26ad5bb9da5a8d78cc5b87ef455f00567
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Direct link to the file'
+        required: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download file using wget
+        run: |
+          mkdir -p download
+          cd download
+          wget --content-disposition "${{ github.event.inputs.url }}"
+
+      - name: Upload file to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: download/*
+          tag_name: file_${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
