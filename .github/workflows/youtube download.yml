@@ -48,17 +48,13 @@ jobs:
             local total_size="$3"
             local url="$4"
 
-            # Start yt-dlp in background using its own progress (hidden later)
             yt-dlp $yt_args -o "$output_template" "$url" &
             local dl_pid=$!
 
-            # Monitor loop: print one line per second with current size
             local output_dir="$(dirname "$output_template")"
-            local base="$(basename "$output_template" | sed 's/%(ext)s/*/')"  # not perfect, we'll watch .part
-            sleep 1  # Wait for yt-dlp to create the .part file
+            sleep 1
 
             while kill -0 $dl_pid 2>/dev/null; do
-              # Find the .part file written by yt-dlp (allows any extension)
               local part_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
               if [ -n "$part_file" ]; then
                 local current=$(stat -c%s "$part_file" 2>/dev/null || echo 0)
@@ -74,7 +70,6 @@ jobs:
               sleep 1
             done
 
-            # Final message after completion
             wait $dl_pid
             local final_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
             if [ -n "$final_file" ]; then
@@ -108,15 +103,22 @@ jobs:
 
             echo "Quality spec: $type $val1 $val2"
             
-            # Base arguments for yt-dlp (no progress bar, Deno, cookies, etc.)
+            # Base arguments for yt-dlp
             YT_DLP_ARGS="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
             
             VIDEO_JSON=$(yt-dlp $YT_DLP_ARGS -j "$link")
             TOTAL_SIZE=0
 
             if [[ "$type" == "v" ]]; then
-              echo "Selecting video with audio..."
+              echo "Selecting video with audio (combined formats only)..."
+              # ONLY consider formats that have both video AND audio (no merging needed)
               COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
+              
+              if [ "$(echo "$COMBINED" | jq 'length')" -eq 0 ]; then
+                echo "ERROR: No combined formats found for this video."
+                exit 1
+              fi
+
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id')
@@ -129,6 +131,7 @@ jobs:
                   FPS="${val2:-0}"
                   HEIGHTS=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
                   CHOSEN_HEIGHT=$(echo "$HEIGHTS" | jq --argjson h "$HEIGHT" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
+                  echo "Selected height: $CHOSEN_HEIGHT"
                   MATCHING=$(echo "$COMBINED" | jq --argjson h "$CHOSEN_HEIGHT" 'map(select(.height == $h))')
                   if [ "$FPS" -gt 0 ]; then
                     EXACT=$(echo "$MATCHING" | jq --argjson f "$FPS" 'map(select(.fps == $f))')
@@ -143,21 +146,19 @@ jobs:
                   ;;
               esac
 
-              if [ -z "$FORMAT_ID" ]; then
-                echo "No combined format found, falling back to bestvideo+bestaudio merge."
-                # Approximate size: try to get max size from bestvideo+bestaudio
-                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec!="none" or .acodec!="none")] | max_by(.filesize // .filesize_approx // 0) | .filesize // .filesize_approx // 0')
-                download_with_progress "$YT_DLP_ARGS -f bestvideo[height<=$HEIGHT]+bestaudio/best" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
-              else
-                # Get size from chosen format
-                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
-                mkdir -p temp_download
-                download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
-              fi
+              TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
+              mkdir -p temp_download
+              download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
 
             elif [[ "$type" == "a" ]]; then
               echo "Selecting audio only..."
               AUDIO_FORMATS=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+
+              if [ "$(echo "$AUDIO_FORMATS" | jq 'length')" -eq 0 ]; then
+                echo "ERROR: No audio-only formats found for this video."
+                exit 1
+              fi
+
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r 'max_by(.abr // .tbr) | .format_id')
@@ -173,15 +174,9 @@ jobs:
                   ;;
               esac
 
-              if [ -z "$FORMAT_ID" ]; then
-                echo "Falling back to bestaudio."
-                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.acodec!="none")] | max_by(.filesize // .filesize_approx // 0) | .filesize // .filesize_approx // 0')
-                download_with_progress "$YT_DLP_ARGS -f bestaudio" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
-              else
-                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
-                mkdir -p temp_download
-                download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
-              fi
+              TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
+              mkdir -p temp_download
+              download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
             fi
           fi
 
