@@ -15,15 +15,23 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Install yt-dlp and jq if needed
+      - name: Install yt-dlp, jq and QuickJS for YouTube challenges
         run: |
+          # yt-dlp
           if ! command -v yt-dlp &> /dev/null; then
             sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
             sudo chmod a+rx /usr/local/bin/yt-dlp
           fi
+          # jq
           if ! command -v jq &> /dev/null; then
             sudo apt-get update -qq && sudo apt-get install -y -qq jq
           fi
+          # QuickJS - a lightweight JS runtime for solving YouTube challenges
+          if ! command -v qjs &> /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq quickjs
+          fi
+          # Tell yt-dlp where to find the JS runtime (though 'qjs' in PATH is enough, we set it explicitly)
+          echo "JS_RUNTIME_PATH=$(which qjs)" >> $GITHUB_ENV
 
       - name: Parse input and download
         run: |
@@ -57,8 +65,11 @@ jobs:
             fi
 
             echo "Quality spec: $type $val1 $val2"
-
-            VIDEO_JSON=$(yt-dlp --cookies cookies.txt -j "$link")
+            
+            # Add --js-runtimes to use QuickJS we just installed
+            YT_DLP_ARGS="--cookies cookies.txt --js-runtimes ${{ env.JS_RUNTIME_PATH }}"
+            
+            VIDEO_JSON=$(yt-dlp $YT_DLP_ARGS -j "$link")
 
             if [[ "$type" == "v" ]]; then
               echo "Selecting video with audio..."
@@ -99,11 +110,11 @@ jobs:
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "No combined format found, falling back to bestvideo+bestaudio merge."
-                yt-dlp --cookies cookies.txt -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp $YT_DLP_ARGS -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
               else
                 echo "Downloading with format_id: $FORMAT_ID"
                 mkdir -p temp_download
-                yt-dlp --cookies cookies.txt -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp $YT_DLP_ARGS -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
               fi
 
             elif [[ "$type" == "a" ]]; then
@@ -134,11 +145,11 @@ jobs:
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "Falling back to bestaudio."
-                yt-dlp --cookies cookies.txt -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp $YT_DLP_ARGS -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
               else
                 echo "Downloading audio with format_id: $FORMAT_ID"
                 mkdir -p temp_download
-                yt-dlp --cookies cookies.txt -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp $YT_DLP_ARGS -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
               fi
             fi
           fi
