@@ -1,4 +1,4 @@
-name: Fetch file (one-line input, smart YouTube)
+name: Fetch file (one-line input, smart YouTube, clean progress)
 
 on:
   workflow_dispatch:
@@ -41,6 +41,49 @@ jobs:
             echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'
           }
 
+          # --- Helper: download with a progress line every 1 second ---
+          download_with_progress() {
+            local yt_args="$1"
+            local output_template="$2"
+            local total_size="$3"
+            local url="$4"
+
+            # Start yt-dlp in background using its own progress (hidden later)
+            yt-dlp $yt_args -o "$output_template" "$url" &
+            local dl_pid=$!
+
+            # Monitor loop: print one line per second with current size
+            local output_dir="$(dirname "$output_template")"
+            local base="$(basename "$output_template" | sed 's/%(ext)s/*/')"  # not perfect, we'll watch .part
+            sleep 1  # Wait for yt-dlp to create the .part file
+
+            while kill -0 $dl_pid 2>/dev/null; do
+              # Find the .part file written by yt-dlp (allows any extension)
+              local part_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
+              if [ -n "$part_file" ]; then
+                local current=$(stat -c%s "$part_file" 2>/dev/null || echo 0)
+                if [ "$total_size" -gt 0 ]; then
+                  local percent=$(awk -v cur="$current" -v total="$total_size" 'BEGIN {printf "%.1f", (cur/total)*100}')
+                  echo "[yt-dlp] ${current} / ${total_size} bytes (${percent}%)"
+                else
+                  echo "[yt-dlp] ${current} bytes downloaded (total unknown)"
+                fi
+              else
+                echo "[yt-dlp] Waiting for download to start..."
+              fi
+              sleep 1
+            done
+
+            # Final message after completion
+            wait $dl_pid
+            local final_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
+            if [ -n "$final_file" ]; then
+              local final_size=$(stat -c%s "$final_file")
+              echo "[yt-dlp] Completed: ${final_size} bytes"
+            fi
+          }
+
+          # --- Main logic ---
           if ! is_youtube "$link"; then
             echo "Non-YouTube link. Downloading with wget..."
             mkdir -p temp_download
@@ -65,10 +108,11 @@ jobs:
 
             echo "Quality spec: $type $val1 $val2"
             
-            # Use Deno runtime + automatic npm-based EJS challenge solver
-            YT_DLP_ARGS="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
+            # Base arguments for yt-dlp (no progress bar, Deno, cookies, etc.)
+            YT_DLP_ARGS="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
             
             VIDEO_JSON=$(yt-dlp $YT_DLP_ARGS -j "$link")
+            TOTAL_SIZE=0
 
             if [[ "$type" == "v" ]]; then
               echo "Selecting video with audio..."
@@ -84,21 +128,13 @@ jobs:
                   HEIGHT="$val1"
                   FPS="${val2:-0}"
                   HEIGHTS=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
-                  echo "Available combined heights: $HEIGHTS"
-                  CHOSEN_HEIGHT=$(echo "$HEIGHTS" | jq --argjson h "$HEIGHT" '
-                    map({h: ., d: (. - $h | abs)})
-                    | sort_by(.d, .h)
-                    | first.h
-                  ')
-                  echo "Closest height to $HEIGHT: $CHOSEN_HEIGHT"
+                  CHOSEN_HEIGHT=$(echo "$HEIGHTS" | jq --argjson h "$HEIGHT" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
                   MATCHING=$(echo "$COMBINED" | jq --argjson h "$CHOSEN_HEIGHT" 'map(select(.height == $h))')
                   if [ "$FPS" -gt 0 ]; then
                     EXACT=$(echo "$MATCHING" | jq --argjson f "$FPS" 'map(select(.fps == $f))')
                     if [ "$(echo "$EXACT" | jq 'length')" -gt 0 ]; then
                       FORMAT_ID=$(echo "$EXACT" | jq -r 'first.format_id')
-                      echo "Exact FPS match found."
                     else
-                      echo "Exact FPS not available, picking highest FPS at this height."
                       FORMAT_ID=$(echo "$MATCHING" | jq -r 'max_by(.fps) | .format_id')
                     fi
                   else
@@ -109,11 +145,14 @@ jobs:
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "No combined format found, falling back to bestvideo+bestaudio merge."
-                yt-dlp $YT_DLP_ARGS -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
+                # Approximate size: try to get max size from bestvideo+bestaudio
+                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec!="none" or .acodec!="none")] | max_by(.filesize // .filesize_approx // 0) | .filesize // .filesize_approx // 0')
+                download_with_progress "$YT_DLP_ARGS -f bestvideo[height<=$HEIGHT]+bestaudio/best" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
               else
-                echo "Downloading with format_id: $FORMAT_ID"
+                # Get size from chosen format
+                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
                 mkdir -p temp_download
-                yt-dlp $YT_DLP_ARGS -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
               fi
 
             elif [[ "$type" == "a" ]]; then
@@ -129,26 +168,19 @@ jobs:
                 *)
                   BITRATE="$val1"
                   BITRATES=$(echo "$AUDIO_FORMATS" | jq '[.[].abr // .tbr] | unique | sort')
-                  echo "Available audio bitrates (kbps): $BITRATES"
-                  CHOSEN_BITRATE=$(echo "$BITRATES" | jq --argjson b "$BITRATE" '
-                    map({br: ., d: (. - $b | abs)})
-                    | sort_by(.d, .br)
-                    | first.br
-                  ')
-                  echo "Closest bitrate to $BITRATE: $CHOSEN_BITRATE"
-                  FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r --argjson br "$CHOSEN_BITRATE" '
-                    map(select((.abr // .tbr) == $br)) | first.format_id
-                  ')
+                  CHOSEN_BITRATE=$(echo "$BITRATES" | jq --argjson b "$BITRATE" 'map({br:., d:(. - $b | abs)}) | sort_by(.d, .br) | first.br')
+                  FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r --argjson br "$CHOSEN_BITRATE" 'map(select((.abr // .tbr) == $br)) | first.format_id')
                   ;;
               esac
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "Falling back to bestaudio."
-                yt-dlp $YT_DLP_ARGS -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
+                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.acodec!="none")] | max_by(.filesize // .filesize_approx // 0) | .filesize // .filesize_approx // 0')
+                download_with_progress "$YT_DLP_ARGS -f bestaudio" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
               else
-                echo "Downloading audio with format_id: $FORMAT_ID"
+                TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
                 mkdir -p temp_download
-                yt-dlp $YT_DLP_ARGS -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
               fi
             fi
           fi
