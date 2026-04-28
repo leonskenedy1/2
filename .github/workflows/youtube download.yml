@@ -30,30 +30,25 @@ jobs:
           INPUT="${{ github.event.inputs.url }}"
           read -r link type val1 val2 <<< "$INPUT"
 
-          # Helper: check if link is a YouTube URL (any subdomain, short link)
           is_youtube() {
             echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'
           }
 
-          # --- Non-YouTube link: ignore extra tokens and download directly ---
           if ! is_youtube "$link"; then
-            echo "Non-YouTube link detected. Downloading with wget..."
+            echo "Non-YouTube link. Downloading with wget..."
             mkdir -p temp_download
             cd temp_download
             wget --progress=bar:force --content-disposition "$link"
             cd ..
-
-          # --- YouTube link ---
           else
             echo "YouTube link detected."
 
-            # Default to 'v max' if quality not specified or invalid
             if [[ "$type" != "v" && "$type" != "a" ]]; then
               type="v"
               val1="max"
               val2=""
             fi
-            # Convert 2k/4k to numeric height (only for video)
+
             if [[ "$type" == "v" ]]; then
               case "$val1" in
                 2k) val1=1440 ;;
@@ -63,14 +58,11 @@ jobs:
 
             echo "Quality spec: $type $val1 $val2"
 
-            VIDEO_JSON=$(yt-dlp -j "$link")
+            VIDEO_JSON=$(yt-dlp --cookies cookies.txt -j "$link")
 
             if [[ "$type" == "v" ]]; then
-              # --- Video selection (combined formats with inherent audio) ---
               echo "Selecting video with audio..."
-
               COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
-
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id')
@@ -81,19 +73,15 @@ jobs:
                 *)
                   HEIGHT="$val1"
                   FPS="${val2:-0}"
-
                   HEIGHTS=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
                   echo "Available combined heights: $HEIGHTS"
-
                   CHOSEN_HEIGHT=$(echo "$HEIGHTS" | jq --argjson h "$HEIGHT" '
                     map({h: ., d: (. - $h | abs)})
                     | sort_by(.d, .h)
                     | first.h
                   ')
                   echo "Closest height to $HEIGHT: $CHOSEN_HEIGHT"
-
                   MATCHING=$(echo "$COMBINED" | jq --argjson h "$CHOSEN_HEIGHT" 'map(select(.height == $h))')
-
                   if [ "$FPS" -gt 0 ]; then
                     EXACT=$(echo "$MATCHING" | jq --argjson f "$FPS" 'map(select(.fps == $f))')
                     if [ "$(echo "$EXACT" | jq 'length')" -gt 0 ]; then
@@ -111,19 +99,16 @@ jobs:
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "No combined format found, falling back to bestvideo+bestaudio merge."
-                yt-dlp -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp --cookies cookies.txt -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
               else
                 echo "Downloading with format_id: $FORMAT_ID"
                 mkdir -p temp_download
-                yt-dlp -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp --cookies cookies.txt -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
               fi
 
             elif [[ "$type" == "a" ]]; then
-              # --- Audio only ---
               echo "Selecting audio only..."
-
               AUDIO_FORMATS=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
-
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r 'max_by(.abr // .tbr) | .format_id')
@@ -135,14 +120,12 @@ jobs:
                   BITRATE="$val1"
                   BITRATES=$(echo "$AUDIO_FORMATS" | jq '[.[].abr // .tbr] | unique | sort')
                   echo "Available audio bitrates (kbps): $BITRATES"
-
                   CHOSEN_BITRATE=$(echo "$BITRATES" | jq --argjson b "$BITRATE" '
                     map({br: ., d: (. - $b | abs)})
                     | sort_by(.d, .br)
                     | first.br
                   ')
                   echo "Closest bitrate to $BITRATE: $CHOSEN_BITRATE"
-
                   FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r --argjson br "$CHOSEN_BITRATE" '
                     map(select((.abr // .tbr) == $br)) | first.format_id
                   ')
@@ -151,11 +134,11 @@ jobs:
 
               if [ -z "$FORMAT_ID" ]; then
                 echo "Falling back to bestaudio."
-                yt-dlp -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp --cookies cookies.txt -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
               else
                 echo "Downloading audio with format_id: $FORMAT_ID"
                 mkdir -p temp_download
-                yt-dlp -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+                yt-dlp --cookies cookies.txt -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
               fi
             fi
           fi
