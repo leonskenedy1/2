@@ -15,7 +15,7 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Install yt-dlp, jq and QuickJS for YouTube challenges
+      - name: Install yt-dlp, jq and Deno for YouTube challenges
         run: |
           # yt-dlp
           if ! command -v yt-dlp &> /dev/null; then
@@ -26,12 +26,11 @@ jobs:
           if ! command -v jq &> /dev/null; then
             sudo apt-get update -qq && sudo apt-get install -y -qq jq
           fi
-          # QuickJS - a lightweight JS runtime for solving YouTube challenges
-          if ! command -v qjs &> /dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq quickjs
+          # Deno (a modern JS runtime that can import npm packages on-the-fly)
+          if ! command -v deno &> /dev/null; then
+            curl -fsSL https://deno.land/install.sh | sh -s -- -y
+            echo "$HOME/.deno/bin" >> $GITHUB_PATH
           fi
-          # Tell yt-dlp where to find the JS runtime (though 'qjs' in PATH is enough, we set it explicitly)
-          echo "JS_RUNTIME_PATH=$(which qjs)" >> $GITHUB_ENV
 
       - name: Parse input and download
         run: |
@@ -66,8 +65,8 @@ jobs:
 
             echo "Quality spec: $type $val1 $val2"
             
-            # Add --js-runtimes to use QuickJS we just installed
-            YT_DLP_ARGS="--cookies cookies.txt --js-runtimes ${{ env.JS_RUNTIME_PATH }}"
+            # Use Deno runtime + automatic npm-based EJS challenge solver
+            YT_DLP_ARGS="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
             
             VIDEO_JSON=$(yt-dlp $YT_DLP_ARGS -j "$link")
 
