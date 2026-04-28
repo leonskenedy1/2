@@ -15,7 +15,7 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Install yt-dlp, jq and Deno for YouTube challenges
+      - name: Install yt-dlp, jq, Deno and ffmpeg
         run: |
           # yt-dlp
           if ! command -v yt-dlp &> /dev/null; then
@@ -26,11 +26,13 @@ jobs:
           if ! command -v jq &> /dev/null; then
             sudo apt-get update -qq && sudo apt-get install -y -qq jq
           fi
-          # Deno (a modern JS runtime that can import npm packages on-the-fly)
+          # Deno
           if ! command -v deno &> /dev/null; then
             curl -fsSL https://deno.land/install.sh | sh -s -- -y
             echo "$HOME/.deno/bin" >> $GITHUB_PATH
           fi
+          # ffmpeg (for remux fix)
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
       - name: Parse input and download
         run: |
@@ -41,19 +43,15 @@ jobs:
             echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'
           }
 
-          # --- Helper: download with a progress line every 1 second ---
           download_with_progress() {
             local yt_args="$1"
             local output_template="$2"
             local total_size="$3"
             local url="$4"
-
             yt-dlp $yt_args -o "$output_template" "$url" &
             local dl_pid=$!
-
             local output_dir="$(dirname "$output_template")"
             sleep 1
-
             while kill -0 $dl_pid 2>/dev/null; do
               local part_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
               if [ -n "$part_file" ]; then
@@ -69,7 +67,6 @@ jobs:
               fi
               sleep 1
             done
-
             wait $dl_pid
             local final_file=$(ls "$output_dir"/*.part 2>/dev/null | head -n1)
             if [ -n "$final_file" ]; then
@@ -87,38 +84,30 @@ jobs:
             cd ..
           else
             echo "YouTube link detected."
-
             if [[ "$type" != "v" && "$type" != "a" ]]; then
               type="v"
               val1="max"
               val2=""
             fi
-
             if [[ "$type" == "v" ]]; then
               case "$val1" in
                 2k) val1=1440 ;;
                 4k) val1=2160 ;;
               esac
             fi
-
             echo "Quality spec: $type $val1 $val2"
             
-            # Base arguments for yt-dlp
             YT_DLP_ARGS="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
-            
             VIDEO_JSON=$(yt-dlp $YT_DLP_ARGS -j "$link")
             TOTAL_SIZE=0
 
             if [[ "$type" == "v" ]]; then
               echo "Selecting video with audio (combined formats only)..."
-              # ONLY consider formats that have both video AND audio (no merging needed)
               COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
-              
               if [ "$(echo "$COMBINED" | jq 'length')" -eq 0 ]; then
-                echo "ERROR: No combined formats found for this video."
+                echo "ERROR: No combined formats found."
                 exit 1
               fi
-
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id')
@@ -145,20 +134,34 @@ jobs:
                   fi
                   ;;
               esac
-
               TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
               mkdir -p temp_download
               download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
+              
+              # === REMUX to fix playback (quick stream copy) ===
+              echo "Remuxing video for compatibility..."
+              cd temp_download
+              INPUT_FILE=$(ls -1 *.mp4 *.webm *.mkv 2>/dev/null | head -n1)
+              if [ -n "$INPUT_FILE" ]; then
+                OUTPUT_FILE="fixed_${INPUT_FILE}"
+                ffmpeg -i "$INPUT_FILE" -c copy "$OUTPUT_FILE" -y
+                if [ $? -eq 0 ]; then
+                  rm "$INPUT_FILE"
+                  mv "$OUTPUT_FILE" "$INPUT_FILE"
+                  echo "Remux successful."
+                else
+                  echo "Remux failed, keeping original file."
+                fi
+              fi
+              cd ..
 
             elif [[ "$type" == "a" ]]; then
               echo "Selecting audio only..."
               AUDIO_FORMATS=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
-
               if [ "$(echo "$AUDIO_FORMATS" | jq 'length')" -eq 0 ]; then
-                echo "ERROR: No audio-only formats found for this video."
+                echo "ERROR: No audio-only formats found."
                 exit 1
               fi
-
               case "$val1" in
                 max)
                   FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r 'max_by(.abr // .tbr) | .format_id')
@@ -173,10 +176,10 @@ jobs:
                   FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r --argjson br "$CHOSEN_BITRATE" 'map(select((.abr // .tbr) == $br)) | first.format_id')
                   ;;
               esac
-
               TOTAL_SIZE=$(echo "$VIDEO_JSON" | jq -r ".formats[] | select(.format_id == \"$FORMAT_ID\") | .filesize // .filesize_approx // 0")
               mkdir -p temp_download
               download_with_progress "$YT_DLP_ARGS -f $FORMAT_ID" "temp_download/%(title)s.%(ext)s" "$TOTAL_SIZE" "$link"
+              # Audio files usually don't need remux, but just in case we leave it.
             fi
           fi
 
@@ -195,12 +198,10 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 524288000
-
           FILES=(downloads/*)
           total=${#FILES[@]}
           BATCH=18
           start=0
-
           while [ $start -lt $total ]; do
             end=$(( start + BATCH ))
             if [ $end -gt $total ]; then end=$total; fi
@@ -209,5 +210,4 @@ jobs:
             git push origin "$BRANCH"
             start=$end
           done
-
           echo "All files uploaded to the 'downloads' folder."
