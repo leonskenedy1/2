@@ -1,0 +1,193 @@
+name: Fetch file (one-line input, smart YouTube)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Enter "URL" or "URL v 720" / "URL a 128" (optional FPS)'
+        required: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Install yt-dlp and jq if needed
+        run: |
+          if ! command -v yt-dlp &> /dev/null; then
+            sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+            sudo chmod a+rx /usr/local/bin/yt-dlp
+          fi
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          fi
+
+      - name: Parse input and download
+        run: |
+          INPUT="${{ github.event.inputs.url }}"
+          read -r link type val1 val2 <<< "$INPUT"
+
+          # Helper: check if link is a YouTube URL (any subdomain, short link)
+          is_youtube() {
+            echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'
+          }
+
+          # --- Non-YouTube link: ignore extra tokens and download directly ---
+          if ! is_youtube "$link"; then
+            echo "Non-YouTube link detected. Downloading with wget..."
+            mkdir -p temp_download
+            cd temp_download
+            wget --progress=bar:force --content-disposition "$link"
+            cd ..
+
+          # --- YouTube link ---
+          else
+            echo "YouTube link detected."
+
+            # Default to 'v max' if quality not specified or invalid
+            if [[ "$type" != "v" && "$type" != "a" ]]; then
+              type="v"
+              val1="max"
+              val2=""
+            fi
+            # Convert 2k/4k to numeric height (only for video)
+            if [[ "$type" == "v" ]]; then
+              case "$val1" in
+                2k) val1=1440 ;;
+                4k) val1=2160 ;;
+              esac
+            fi
+
+            echo "Quality spec: $type $val1 $val2"
+
+            VIDEO_JSON=$(yt-dlp -j "$link")
+
+            if [[ "$type" == "v" ]]; then
+              # --- Video selection (combined formats with inherent audio) ---
+              echo "Selecting video with audio..."
+
+              COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
+
+              case "$val1" in
+                max)
+                  FORMAT_ID=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id')
+                  ;;
+                min)
+                  FORMAT_ID=$(echo "$COMBINED" | jq -r 'min_by(.height, .fps) | .format_id')
+                  ;;
+                *)
+                  HEIGHT="$val1"
+                  FPS="${val2:-0}"
+
+                  HEIGHTS=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
+                  echo "Available combined heights: $HEIGHTS"
+
+                  CHOSEN_HEIGHT=$(echo "$HEIGHTS" | jq --argjson h "$HEIGHT" '
+                    map({h: ., d: (. - $h | abs)})
+                    | sort_by(.d, .h)
+                    | first.h
+                  ')
+                  echo "Closest height to $HEIGHT: $CHOSEN_HEIGHT"
+
+                  MATCHING=$(echo "$COMBINED" | jq --argjson h "$CHOSEN_HEIGHT" 'map(select(.height == $h))')
+
+                  if [ "$FPS" -gt 0 ]; then
+                    EXACT=$(echo "$MATCHING" | jq --argjson f "$FPS" 'map(select(.fps == $f))')
+                    if [ "$(echo "$EXACT" | jq 'length')" -gt 0 ]; then
+                      FORMAT_ID=$(echo "$EXACT" | jq -r 'first.format_id')
+                      echo "Exact FPS match found."
+                    else
+                      echo "Exact FPS not available, picking highest FPS at this height."
+                      FORMAT_ID=$(echo "$MATCHING" | jq -r 'max_by(.fps) | .format_id')
+                    fi
+                  else
+                    FORMAT_ID=$(echo "$MATCHING" | jq -r 'max_by(.fps) | .format_id')
+                  fi
+                  ;;
+              esac
+
+              if [ -z "$FORMAT_ID" ]; then
+                echo "No combined format found, falling back to bestvideo+bestaudio merge."
+                yt-dlp -f "bestvideo[height<=$HEIGHT]+bestaudio/best" -o "temp_download/%(title)s.%(ext)s" "$link"
+              else
+                echo "Downloading with format_id: $FORMAT_ID"
+                mkdir -p temp_download
+                yt-dlp -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+              fi
+
+            elif [[ "$type" == "a" ]]; then
+              # --- Audio only ---
+              echo "Selecting audio only..."
+
+              AUDIO_FORMATS=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+
+              case "$val1" in
+                max)
+                  FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r 'max_by(.abr // .tbr) | .format_id')
+                  ;;
+                min)
+                  FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r 'min_by(.abr // .tbr) | .format_id')
+                  ;;
+                *)
+                  BITRATE="$val1"
+                  BITRATES=$(echo "$AUDIO_FORMATS" | jq '[.[].abr // .tbr] | unique | sort')
+                  echo "Available audio bitrates (kbps): $BITRATES"
+
+                  CHOSEN_BITRATE=$(echo "$BITRATES" | jq --argjson b "$BITRATE" '
+                    map({br: ., d: (. - $b | abs)})
+                    | sort_by(.d, .br)
+                    | first.br
+                  ')
+                  echo "Closest bitrate to $BITRATE: $CHOSEN_BITRATE"
+
+                  FORMAT_ID=$(echo "$AUDIO_FORMATS" | jq -r --argjson br "$CHOSEN_BITRATE" '
+                    map(select((.abr // .tbr) == $br)) | first.format_id
+                  ')
+                  ;;
+              esac
+
+              if [ -z "$FORMAT_ID" ]; then
+                echo "Falling back to bestaudio."
+                yt-dlp -f "bestaudio" -o "temp_download/%(title)s.%(ext)s" "$link"
+              else
+                echo "Downloading audio with format_id: $FORMAT_ID"
+                mkdir -p temp_download
+                yt-dlp -f "$FORMAT_ID" -o "temp_download/%(title)s.%(ext)s" "$link"
+              fi
+            fi
+          fi
+
+      - name: Create split zip (each part ≤ 98 MB)
+        run: |
+          cd temp_download
+          FILE=$(ls -1)
+          cd ..
+          mkdir -p downloads
+          zip -s 98m -r "downloads/${FILE}.zip" "temp_download/${FILE}"
+
+      - name: Batch commit & push parts
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git config http.postBuffer 524288000
+
+          FILES=(downloads/*)
+          total=${#FILES[@]}
+          BATCH=18
+          start=0
+
+          while [ $start -lt $total ]; do
+            end=$(( start + BATCH ))
+            if [ $end -gt $total ]; then end=$total; fi
+            git add "${FILES[@]:start:end-start}"
+            git commit -m "Add parts $(($start+1))-$end [skip ci]"
+            git push origin "$BRANCH"
+            start=$end
+          done
+
+          echo "All files uploaded to the 'downloads' folder."
