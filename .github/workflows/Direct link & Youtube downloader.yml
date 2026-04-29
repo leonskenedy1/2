@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Enter "URL" or "URL v 720" / "URL a 128" (optional FPS)'
+        description: 'Enter "URL" "v/a" "video resolution/audio bitrate" "video FPS (optional)"'
         required: true
 
 jobs:
