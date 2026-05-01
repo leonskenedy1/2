@@ -1,0 +1,288 @@
+name: Direct link & Youtube downloader
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Enter "URL" "v/a" "video resolution/audio bitrate" "video FPS (optional)"'
+        required: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Parse input (Is it YouTube?)
+        id: parse
+        run: |
+          INPUT="${{ github.event.inputs.url }}"
+          IFS=' ' read -ra TOKENS <<< "$INPUT"
+          current_url=""
+          current_opts=()
+          > tasks.txt
+          for token in "${TOKENS[@]}"; do
+            if [[ "$token" =~ ^https?:// ]]; then
+              if [ -n "$current_url" ]; then
+                echo "$current_url ${current_opts[*]}" >> tasks.txt
+              fi
+              current_url="$token"
+              current_opts=()
+            else
+              current_opts+=("$token")
+            fi
+          done
+          if [ -n "$current_url" ]; then
+            echo "$current_url ${current_opts[*]}" >> tasks.txt
+          fi
+          if grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)' tasks.txt; then
+            echo "IS_YOUTUBE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_YOUTUBE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install tools (YouTube only)
+        if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        run: |
+          if ! command -v yt-dlp &> /dev/null; then
+            sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+            sudo chmod a+rx /usr/local/bin/yt-dlp
+          fi
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          fi
+          if ! command -v deno &> /dev/null; then
+            curl -fsSL https://deno.land/install.sh | sh -s -- -y
+            echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+- name: Select format (YouTube only)
+  if: steps.parse.outputs.IS_YOUTUBE == 'true'
+  run: |
+    set -euo pipefail
+    mkdir -p temp_downloads
+    YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
+    is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
+    get_video_id() { echo "$1" | sed -n 's/.*\(v=\|youtu\.be\/\)\([a-zA-Z0-9_-]\{11\}\).*/\2/p'; }
+
+    echo "[" > selected_formats.json
+    first_entry=true
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      url="${line%% *}"
+      opts="${line#* }"
+      [ "$url" = "$opts" ] && opts=""
+      if ! is_youtube "$url"; then continue; fi
+      video_id=$(get_video_id "$url")
+      if [ -z "$video_id" ]; then
+        echo "ERROR: Could not extract video ID from $url, skipping."
+        continue
+      fi
+      echo "Processing: $url (ID: $video_id)"
+      if ! VIDEO_JSON=$(yt-dlp $YTDLP_BASE -j "$url" 2>&1); then
+        echo "ERROR: yt-dlp failed for $url. Skipping this URL."
+        continue
+      fi
+      if [ -z "$VIDEO_JSON" ]; then
+        echo "ERROR: Empty JSON for $url. Skipping."
+        continue
+      fi
+
+      if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
+      declare -a groups
+      i=0
+      while [ $i -lt ${#spec_args[@]} ]; do
+        type="${spec_args[$i]}"; ((i++))
+        if [[ "$type" != "v" && "$type" != "a" ]]; then continue; fi
+        if [ $i -ge ${#spec_args[@]} ]; then val1="max"; val2=""; else
+          val1="${spec_args[$i]}"; ((i++))
+          if [[ "$type" == "v" ]]; then case "$val1" in 2k) val1=1440;; 4k) val1=2160;; esac; fi
+          val2=""
+          if [[ "$type" == "v" && "$val1" =~ ^[0-9]+$ && $i -lt ${#spec_args[@]} ]]; then
+            next="${spec_args[$i]}"
+            if [[ "$next" =~ ^[0-9]+$ ]]; then val2="$next"; ((i++)); fi
+          fi
+        fi
+        groups+=("$type $val1 $val2")
+      done
+
+      declare -A seen_group; unique_groups=()
+      for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
+
+      COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
+      AUDIO_ONLY=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+
+      declare -A formats_to_download
+      for grp in "${unique_groups[@]}"; do
+        read -r gtype gval1 gval2 <<< "$grp"
+        if [[ "$gtype" == "v" ]]; then
+          if [[ "$gval1" == "all" ]]; then
+            all_ids=$(echo "$COMBINED" | jq -r '.[].format_id')
+            for fid in $all_ids; do formats_to_download["$fid"]="video"; done
+            continue
+          fi
+          case "$gval1" in
+            max) fid=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id');;
+            min) fid=$(echo "$COMBINED" | jq -r 'min_by(.height, .fps) | .format_id');;
+            *)
+              height="$gval1"; fps="${gval2:-0}"
+              heights=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
+              chosen_height=$(echo "$heights" | jq --argjson h "$height" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
+              matching=$(echo "$COMBINED" | jq --argjson h "$chosen_height" 'map(select(.height == $h))')
+              if [ "$fps" -gt 0 ]; then
+                exact=$(echo "$matching" | jq --argjson f "$fps" 'map(select(.fps == $f))')
+                if [ "$(echo "$exact" | jq 'length')" -gt 0 ]; then fid=$(echo "$exact" | jq -r 'first.format_id'); else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
+              else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
+              ;;
+          esac
+          formats_to_download["$fid"]="video"
+        else
+          if [[ "$gval1" == "all" ]]; then
+            all_ids=$(echo "$AUDIO_ONLY" | jq -r '.[].format_id')
+            for fid in $all_ids; do formats_to_download["$fid"]="audio"; done
+            continue
+          fi
+          case "$gval1" in
+            max) fid=$(echo "$AUDIO_ONLY" | jq -r 'max_by(.abr // .tbr) | .format_id');;
+            min) fid=$(echo "$AUDIO_ONLY" | jq -r 'min_by(.abr // .tbr) | .format_id');;
+            *)
+              bitrate="$gval1"
+              bitrates=$(echo "$AUDIO_ONLY" | jq '[.[].abr // .tbr] | unique | sort')
+              chosen_bitrate=$(echo "$bitrates" | jq --argjson b "$bitrate" 'map({br:., d:(. - $b | abs)}) | sort_by(.d, .br) | first.br')
+              fid=$(echo "$AUDIO_ONLY" | jq -r --argjson br "$chosen_bitrate" 'map(select((.abr // .tbr) == $br)) | first.format_id');;
+          esac
+          formats_to_download["$fid"]="audio"
+        fi
+      done
+
+      [ "$first_entry" = true ] && first_entry=false || echo "," >> selected_formats.json
+      echo -n "  {\"url\":\"$url\",\"video_id\":\"$video_id\",\"formats\":{" >> selected_formats.json
+      first_fid=true
+      for fid in "${!formats_to_download[@]}"; do
+        ftype="${formats_to_download[$fid]}"
+        [ "$first_fid" = true ] && first_fid=false || echo -n "," >> selected_formats.json
+        echo -n "\"$fid\":\"$ftype\"" >> selected_formats.json
+      done
+      echo "}}" >> selected_formats.json
+    done < tasks.txt
+    echo "]" >> selected_formats.json
+
+      - name: Download
+        run: |
+          mkdir -p temp_downloads
+          is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
+
+          echo "[" > download_manifest.json
+          first_url=true
+          while IFS= read -r line; do
+            url="${line%% *}"
+            if ! is_youtube "$url"; then
+              cd temp_downloads
+              wget --progress=bar:force --content-disposition "$url"
+              dl_file=$(ls -1)
+              cd ..
+              [ "$first_url" = true ] && first_url=false || echo "," >> download_manifest.json
+              echo -n "{\"url\":\"$url\",\"is_youtube\":false,\"video_id\":\"\",\"files\":[{\"filename\":\"$dl_file\",\"type\":\"direct\"}]}" >> download_manifest.json
+            fi
+          done < tasks.txt
+
+          if [ -f selected_formats.json ]; then
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
+            while read -r entry; do
+              url=$(echo "$entry" | jq -r '.url')
+              video_id=$(echo "$entry" | jq -r '.video_id')
+              formats=$(echo "$entry" | jq -r '.formats')
+              [ "$first_url" = true ] && first_url=false || echo "," >> download_manifest.json
+              echo -n "{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"files\":[" >> download_manifest.json
+              first_file=true
+              for fid in $(echo "$formats" | jq -r 'keys[]'); do
+                ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
+                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/%(title)s_${fid}.%(ext)s" "$url"
+                dl_file=$(ls temp_downloads/*_${fid}.* 2>/dev/null | head -n1)
+                [ -z "$dl_file" ] && continue
+                [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
+                echo -n "{\"filename\":\"$(basename "$dl_file")\",\"type\":\"$ftype\"}" >> download_manifest.json
+              done
+              echo -n "]}" >> download_manifest.json
+            done < <(jq -c '.[]' selected_formats.json)
+          fi
+          echo "]" >> download_manifest.json
+
+      - name: Remux (YouTube video only)
+        if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        run: |
+          if [ -f download_manifest.json ]; then
+            jq -r '.[] | select(.is_youtube == true) | .files[] | select(.type == "video") | .filename' download_manifest.json | while read -r fname; do
+              cd temp_downloads
+              echo "Remuxing $fname..."
+              out="fixed_$fname"
+              ffmpeg -i "$fname" -c copy "$out" -y
+              if [ $? -eq 0 ]; then rm "$fname" && mv "$out" "$fname"; else echo "Remux failed for $fname"; fi
+              cd ..
+            done
+          fi
+
+      - name: Create ZIP & Split file
+        run: |
+          mkdir -p final_downloads
+          jq -c '.[]' download_manifest.json | while read -r entry; do
+            url=$(echo "$entry" | jq -r '.url')
+            is_yt=$(echo "$entry" | jq -r '.is_youtube')
+            if [ "$is_yt" = "false" ]; then
+              fname=$(echo "$entry" | jq -r '.files[0].filename')
+              cd temp_downloads
+              zip -s 99m -r "../final_downloads/${fname}.zip" "$fname"
+              cd ..
+            else
+              video_id=$(echo "$entry" | jq -r '.video_id')
+              video_files=$(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename')
+              audio_files=$(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename')
+              if [ -n "$video_files" ]; then
+                mkdir -p temp_downloads/${video_id}_videos
+                for vf in $video_files; do cp "temp_downloads/$vf" "temp_downloads/${video_id}_videos/"; done
+                zip -s 99m -r "final_downloads/${video_id}_videos.zip" "temp_downloads/${video_id}_videos"
+                rm -rf "temp_downloads/${video_id}_videos"
+              fi
+              if [ -n "$audio_files" ]; then
+                mkdir -p temp_downloads/${video_id}_audios
+                for af in $audio_files; do cp "temp_downloads/$af" "temp_downloads/${video_id}_audios/"; done
+                zip -s 99m -r "final_downloads/${video_id}_audios.zip" "temp_downloads/${video_id}_audios"
+                rm -rf "temp_downloads/${video_id}_audios"
+              fi
+            fi
+          done
+
+      - name: Upload to download folder
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p downloads
+          if [ -d final_downloads ] && [ "$(ls -A final_downloads 2>/dev/null)" ]; then
+            mv final_downloads/* downloads/
+          fi
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git config http.postBuffer 524288000
+
+          if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
+            echo "No files to upload."
+            exit 0
+          fi
+
+          FILES=(downloads/*)
+          total=${#FILES[@]}
+          BATCH=19
+          start=0
+
+          while [ $start -lt $total ]; do
+            end=$(( start + BATCH ))
+            if [ $end -gt $total ]; then end=$total; fi
+            git add "${FILES[@]:start:end-start}"
+            git commit -m "Add parts $(($start+1))-$end [skip ci]"
+            git push origin "$BRANCH"
+            start=$end
+          done
+
+          echo "All files uploaded to the 'downloads' folder."
