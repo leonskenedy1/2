@@ -79,6 +79,28 @@ jobs:
             video_id=$(get_video_id "$url")
             echo "Processing YouTube URL: $url"
 
+            TEMP_JSON="temp_${video_id}.json"
+            if ! yt-dlp $YTDLP_BASE -j "$url" > "$TEMP_JSON" 2>error.log; then
+              echo "ERROR: yt-dlp failed for $url. See error.log:"
+              cat error.log
+              rm -f "$TEMP_JSON" error.log
+              continue
+            fi
+            if [ ! -s "$TEMP_JSON" ]; then
+              echo "ERROR: Empty JSON file for $url. Skipping."
+              rm -f "$TEMP_JSON" error.log
+              continue
+            fi
+
+            COMBINED=$(jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]' "$TEMP_JSON")
+            AUDIO_ONLY=$(jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]' "$TEMP_JSON")
+            if [ -z "$COMBINED" ] || [ "$COMBINED" = "[]" ]; then
+              echo "WARNING: No combined (video+audio) formats found for $url"
+            fi
+            if [ -z "$AUDIO_ONLY" ] || [ "$AUDIO_ONLY" = "[]" ]; then
+              echo "WARNING: No audio-only formats found for $url"
+            fi
+
             if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
             declare -a groups
             i=0
@@ -99,16 +121,6 @@ jobs:
 
             declare -A seen_group; unique_groups=()
             for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
-
-            COMBINED=$(yt-dlp $YTDLP_BASE -j "$url" 2>/dev/null | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
-            AUDIO_ONLY=$(yt-dlp $YTDLP_BASE -j "$url" 2>/dev/null | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
-
-            if [ -z "$COMBINED" ] || [ "$COMBINED" = "[]" ]; then
-              echo "ERROR: No combined formats found for $url"
-            fi
-            if [ -z "$AUDIO_ONLY" ] || [ "$AUDIO_ONLY" = "[]" ]; then
-              echo "ERROR: No audio-only formats found for $url"
-            fi
 
             declare -A formats_to_download
             for grp in "${unique_groups[@]}"; do
@@ -162,6 +174,8 @@ jobs:
               echo -n "\"$fid\":\"$ftype\"" >> selected_formats.json
             done
             echo "}}" >> selected_formats.json
+
+            rm -f "$TEMP_JSON" error.log
           done < tasks.txt
           echo "]" >> selected_formats.json
 
