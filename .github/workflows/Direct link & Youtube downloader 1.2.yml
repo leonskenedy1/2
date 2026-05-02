@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader 1.1
+name: Direct link & Youtube downloader 1.2
 on:
   workflow_dispatch:
     inputs:
@@ -61,6 +61,9 @@ jobs:
       - name: Select format (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
         run: |
+          set -euo pipefail
+          export PATH="$HOME/.deno/bin:$PATH"
+
           mkdir -p temp_downloads
           YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
           is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
@@ -74,7 +77,7 @@ jobs:
             [ "$url" = "$opts" ] && opts=""
             if ! is_youtube "$url"; then continue; fi
             video_id=$(get_video_id "$url")
-            VIDEO_JSON=$(yt-dlp $YTDLP_BASE -j "$url")
+            echo "Processing YouTube URL: $url"
 
             if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
             declare -a groups
@@ -97,8 +100,15 @@ jobs:
             declare -A seen_group; unique_groups=()
             for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
 
-            COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
-            AUDIO_ONLY=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+            COMBINED=$(yt-dlp $YTDLP_BASE -j "$url" 2>/dev/null | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
+            AUDIO_ONLY=$(yt-dlp $YTDLP_BASE -j "$url" 2>/dev/null | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+
+            if [ -z "$COMBINED" ] || [ "$COMBINED" = "[]" ]; then
+              echo "ERROR: No combined formats found for $url"
+            fi
+            if [ -z "$AUDIO_ONLY" ] || [ "$AUDIO_ONLY" = "[]" ]; then
+              echo "ERROR: No audio-only formats found for $url"
+            fi
 
             declare -A formats_to_download
             for grp in "${unique_groups[@]}"; do
