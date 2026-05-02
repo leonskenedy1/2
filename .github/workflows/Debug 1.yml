@@ -58,116 +58,113 @@ jobs:
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-- name: Select format (YouTube only)
-  if: steps.parse.outputs.IS_YOUTUBE == 'true'
-  run: |
-    set -euo pipefail
-    mkdir -p temp_downloads
-    YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
-    is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
-    get_video_id() { echo "$1" | sed -n 's/.*\(v=\|youtu\.be\/\)\([a-zA-Z0-9_-]\{11\}\).*/\2/p'; }
+      - name: Select format (YouTube only)
+        if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.deno/bin:$PATH"
 
-    echo "[" > selected_formats.json
-    first_entry=true
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      url="${line%% *}"
-      opts="${line#* }"
-      [ "$url" = "$opts" ] && opts=""
-      if ! is_youtube "$url"; then continue; fi
-      video_id=$(get_video_id "$url")
-      if [ -z "$video_id" ]; then
-        echo "ERROR: Could not extract video ID from $url, skipping."
-        continue
-      fi
-      echo "Processing: $url (ID: $video_id)"
-      if ! VIDEO_JSON=$(yt-dlp $YTDLP_BASE -j "$url" 2>&1); then
-        echo "ERROR: yt-dlp failed for $url. Skipping this URL."
-        continue
-      fi
-      if [ -z "$VIDEO_JSON" ]; then
-        echo "ERROR: Empty JSON for $url. Skipping."
-        continue
-      fi
+          mkdir -p temp_downloads
+          YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
+          is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
+          get_video_id() { echo "$1" | sed -n 's/.*\(v=\|youtu\.be\/\)\([a-zA-Z0-9_-]\{11\}\).*/\2/p'; }
 
-      if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
-      declare -a groups
-      i=0
-      while [ $i -lt ${#spec_args[@]} ]; do
-        type="${spec_args[$i]}"; ((i++))
-        if [[ "$type" != "v" && "$type" != "a" ]]; then continue; fi
-        if [ $i -ge ${#spec_args[@]} ]; then val1="max"; val2=""; else
-          val1="${spec_args[$i]}"; ((i++))
-          if [[ "$type" == "v" ]]; then case "$val1" in 2k) val1=1440;; 4k) val1=2160;; esac; fi
-          val2=""
-          if [[ "$type" == "v" && "$val1" =~ ^[0-9]+$ && $i -lt ${#spec_args[@]} ]]; then
-            next="${spec_args[$i]}"
-            if [[ "$next" =~ ^[0-9]+$ ]]; then val2="$next"; ((i++)); fi
-          fi
-        fi
-        groups+=("$type $val1 $val2")
-      done
+          echo "[" > selected_formats.json
+          first_entry=true
+          while IFS= read -r line; do
+            url="${line%% *}"
+            opts="${line#* }"
+            [ "$url" = "$opts" ] && opts=""
+            if ! is_youtube "$url"; then continue; fi
+            video_id=$(get_video_id "$url")
+            echo "Processing YouTube URL: $url"
+            if ! VIDEO_JSON=$(yt-dlp $YTDLP_BASE -j "$url" 2>&1); then
+              echo "ERROR: yt-dlp failed for $url. Output: $VIDEO_JSON"
+              continue
+            fi
+            if [ -z "$VIDEO_JSON" ]; then
+              echo "ERROR: Empty JSON returned for $url. Skipping."
+              continue
+            fi
 
-      declare -A seen_group; unique_groups=()
-      for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
+            if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
+            declare -a groups
+            i=0
+            while [ $i -lt ${#spec_args[@]} ]; do
+              type="${spec_args[$i]}"; ((i++))
+              if [[ "$type" != "v" && "$type" != "a" ]]; then continue; fi
+              if [ $i -ge ${#spec_args[@]} ]; then val1="max"; val2=""; else
+                val1="${spec_args[$i]}"; ((i++))
+                if [[ "$type" == "v" ]]; then case "$val1" in 2k) val1=1440;; 4k) val1=2160;; esac; fi
+                val2=""
+                if [[ "$type" == "v" && "$val1" =~ ^[0-9]+$ && $i -lt ${#spec_args[@]} ]]; then
+                  next="${spec_args[$i]}"
+                  if [[ "$next" =~ ^[0-9]+$ ]]; then val2="$next"; ((i++)); fi
+                fi
+              fi
+              groups+=("$type $val1 $val2")
+            done
 
-      COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
-      AUDIO_ONLY=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
+            declare -A seen_group; unique_groups=()
+            for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
 
-      declare -A formats_to_download
-      for grp in "${unique_groups[@]}"; do
-        read -r gtype gval1 gval2 <<< "$grp"
-        if [[ "$gtype" == "v" ]]; then
-          if [[ "$gval1" == "all" ]]; then
-            all_ids=$(echo "$COMBINED" | jq -r '.[].format_id')
-            for fid in $all_ids; do formats_to_download["$fid"]="video"; done
-            continue
-          fi
-          case "$gval1" in
-            max) fid=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id');;
-            min) fid=$(echo "$COMBINED" | jq -r 'min_by(.height, .fps) | .format_id');;
-            *)
-              height="$gval1"; fps="${gval2:-0}"
-              heights=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
-              chosen_height=$(echo "$heights" | jq --argjson h "$height" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
-              matching=$(echo "$COMBINED" | jq --argjson h "$chosen_height" 'map(select(.height == $h))')
-              if [ "$fps" -gt 0 ]; then
-                exact=$(echo "$matching" | jq --argjson f "$fps" 'map(select(.fps == $f))')
-                if [ "$(echo "$exact" | jq 'length')" -gt 0 ]; then fid=$(echo "$exact" | jq -r 'first.format_id'); else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
-              else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
-              ;;
-          esac
-          formats_to_download["$fid"]="video"
-        else
-          if [[ "$gval1" == "all" ]]; then
-            all_ids=$(echo "$AUDIO_ONLY" | jq -r '.[].format_id')
-            for fid in $all_ids; do formats_to_download["$fid"]="audio"; done
-            continue
-          fi
-          case "$gval1" in
-            max) fid=$(echo "$AUDIO_ONLY" | jq -r 'max_by(.abr // .tbr) | .format_id');;
-            min) fid=$(echo "$AUDIO_ONLY" | jq -r 'min_by(.abr // .tbr) | .format_id');;
-            *)
-              bitrate="$gval1"
-              bitrates=$(echo "$AUDIO_ONLY" | jq '[.[].abr // .tbr] | unique | sort')
-              chosen_bitrate=$(echo "$bitrates" | jq --argjson b "$bitrate" 'map({br:., d:(. - $b | abs)}) | sort_by(.d, .br) | first.br')
-              fid=$(echo "$AUDIO_ONLY" | jq -r --argjson br "$chosen_bitrate" 'map(select((.abr // .tbr) == $br)) | first.format_id');;
-          esac
-          formats_to_download["$fid"]="audio"
-        fi
-      done
+            COMBINED=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]')
+            AUDIO_ONLY=$(echo "$VIDEO_JSON" | jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]')
 
-      [ "$first_entry" = true ] && first_entry=false || echo "," >> selected_formats.json
-      echo -n "  {\"url\":\"$url\",\"video_id\":\"$video_id\",\"formats\":{" >> selected_formats.json
-      first_fid=true
-      for fid in "${!formats_to_download[@]}"; do
-        ftype="${formats_to_download[$fid]}"
-        [ "$first_fid" = true ] && first_fid=false || echo -n "," >> selected_formats.json
-        echo -n "\"$fid\":\"$ftype\"" >> selected_formats.json
-      done
-      echo "}}" >> selected_formats.json
-    done < tasks.txt
-    echo "]" >> selected_formats.json
+            declare -A formats_to_download
+            for grp in "${unique_groups[@]}"; do
+              read -r gtype gval1 gval2 <<< "$grp"
+              if [[ "$gtype" == "v" ]]; then
+                if [[ "$gval1" == "all" ]]; then
+                  all_ids=$(echo "$COMBINED" | jq -r '.[].format_id')
+                  for fid in $all_ids; do formats_to_download["$fid"]="video"; done
+                  continue
+                fi
+                case "$gval1" in
+                  max) fid=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id');;
+                  min) fid=$(echo "$COMBINED" | jq -r 'min_by(.height, .fps) | .format_id');;
+                  *)
+                    height="$gval1"; fps="${gval2:-0}"
+                    heights=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
+                    chosen_height=$(echo "$heights" | jq --argjson h "$height" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
+                    matching=$(echo "$COMBINED" | jq --argjson h "$chosen_height" 'map(select(.height == $h))')
+                    if [ "$fps" -gt 0 ]; then
+                      exact=$(echo "$matching" | jq --argjson f "$fps" 'map(select(.fps == $f))')
+                      if [ "$(echo "$exact" | jq 'length')" -gt 0 ]; then fid=$(echo "$exact" | jq -r 'first.format_id'); else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
+                    else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
+                    ;;
+                esac
+                formats_to_download["$fid"]="video"
+              else
+                if [[ "$gval1" == "all" ]]; then
+                  all_ids=$(echo "$AUDIO_ONLY" | jq -r '.[].format_id')
+                  for fid in $all_ids; do formats_to_download["$fid"]="audio"; done
+                  continue
+                fi
+                case "$gval1" in
+                  max) fid=$(echo "$AUDIO_ONLY" | jq -r 'max_by(.abr // .tbr) | .format_id');;
+                  min) fid=$(echo "$AUDIO_ONLY" | jq -r 'min_by(.abr // .tbr) | .format_id');;
+                  *)
+                    bitrate="$gval1"
+                    bitrates=$(echo "$AUDIO_ONLY" | jq '[.[].abr // .tbr] | unique | sort')
+                    chosen_bitrate=$(echo "$bitrates" | jq --argjson b "$bitrate" 'map({br:., d:(. - $b | abs)}) | sort_by(.d, .br) | first.br')
+                    fid=$(echo "$AUDIO_ONLY" | jq -r --argjson br "$chosen_bitrate" 'map(select((.abr // .tbr) == $br)) | first.format_id');;
+                esac
+                formats_to_download["$fid"]="audio"
+              fi
+            done
+
+            [ "$first_entry" = true ] && first_entry=false || echo "," >> selected_formats.json
+            echo -n "  {\"url\":\"$url\",\"video_id\":\"$video_id\",\"formats\":{" >> selected_formats.json
+            first_fid=true
+            for fid in "${!formats_to_download[@]}"; do
+              ftype="${formats_to_download[$fid]}"
+              [ "$first_fid" = true ] && first_fid=false || echo -n "," >> selected_formats.json
+              echo -n "\"$fid\":\"$ftype\"" >> selected_formats.json
+            done
+            echo "}}" >> selected_formats.json
+          done < tasks.txt
+          echo "]" >> selected_formats.json
 
       - name: Download
         run: |
