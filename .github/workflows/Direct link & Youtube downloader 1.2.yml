@@ -83,68 +83,74 @@ jobs:
             fi
           done < tasks.txt
 
-          if [ -f selected_formats.json ]; then
+          if [ -f download_queue.json ]; then
             YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
             PROGRESS_TEMPLATE="%(progress._percent_str)s of %(progress._total_bytes_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s (frag %(progress.fragment_index)s/%(progress.fragment_count)s)"
 
-            while read -r entry; do
-              url=$(echo "$entry" | jq -r '.url')
-              video_id=$(echo "$entry" | jq -r '.video_id')
-              title=$(echo "$entry" | jq -r '.title')
-              formats=$(echo "$entry" | jq -r '.formats')
-              [ "$first_url" = true ] && first_url=false || echo "," >> download_manifest.json
-              echo -n "{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"title\":\"$title\",\"files\":[" >> download_manifest.json
-              first_file=true
-              for fid in $(echo "$formats" | jq -r 'keys[]'); do
-                ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
-                outname="${title}_${fid}.%(ext)s"
+            declare -A manifest_groups
+            total_items=$(jq length download_queue.json)
+            item_index=0
 
-                stdbuf -oL yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
-                  --progress-delta 1 \
-                  --progress-template "$PROGRESS_TEMPLATE" \
-                  "$url"
+            jq -c '.[]' download_queue.json | while read -r dl_item; do
+              url=$(echo "$dl_item" | jq -r '.url')
+              title=$(echo "$dl_item" | jq -r '.title')
+              video_id=$(echo "$dl_item" | jq -r '.video_id')
+              fid=$(echo "$dl_item" | jq -r '.format_id')
+              ftype=$(echo "$dl_item" | jq -r '.type')
+              delay_after=$(echo "$dl_item" | jq -r '.delay_after')
+              outname="${title}_${fid}.%(ext)s"
 
-                dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
-                [ -z "$dl_file" ] && continue
-                [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
-                echo -n "{\"filename\":\"$(basename "$dl_file")\",\"type\":\"$ftype\"}" >> download_manifest.json
-              done
-              echo -n "]}" >> download_manifest.json
-            done < <(jq -c '.[]' selected_formats.json)
+              echo "[$((item_index+1))/$total_items] Downloading $ftype format $fid for $title"
+              stdbuf -oL yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
+                --progress-delta 1 \
+                --progress-template "$PROGRESS_TEMPLATE" \
+                "$url"
+
+              dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
+              if [ -n "$dl_file" ]; then
+                key="${url}|${title}"
+                if [ -z "${manifest_groups[$key]}" ]; then
+                  manifest_groups[$key]="{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"title\":\"$title\",\"files\":[]}"
+                fi
+                manifest_groups[$key]=$(echo "${manifest_groups[$key]}" | jq -c --arg fname "$(basename "$dl_file")" --arg ftype "$ftype" '.files += [{filename: $fname, type: $ftype}]')
+              fi
+
+              item_index=$((item_index + 1))
+              if [ "$item_index" -lt "$total_items" ] && [ "$(echo "$delay_after > 0" | bc)" -eq 1 ]; then
+                echo "Sleeping for $delay_after seconds..."
+                sleep "$delay_after"
+              fi
+            done
+
+            first_grp=true
+            for key in "${!manifest_groups[@]}"; do
+              [ "$first_grp" = true ] && first_grp=false || echo "," >> download_manifest.json
+              echo -n "${manifest_groups[$key]}" >> download_manifest.json
+            done
           fi
           echo "]" >> download_manifest.json
 
       - name: Remux (YouTube video only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
         run: |
-          if [ ! -f selected_formats.json ]; then
-            echo "No selected formats, skipping remux."
+          if [ ! -f download_manifest.json ]; then
+            echo "No manifest, skipping remux."
             exit 0
           fi
-          jq -r '.[] | .formats | to_entries[] | select(.value == "video") | "\(.key)"' selected_formats.json > video_format_ids.txt
-          if [ ! -s video_format_ids.txt ]; then
-            echo "No video formats selected, skipping remux."
+          jq -r '.[] | select(.is_youtube == true) | .files[] | select(.type == "video") | .filename' download_manifest.json > videos_to_remux.txt
+          if [ ! -s videos_to_remux.txt ]; then
+            echo "No video files to remux."
             exit 0
           fi
-          while IFS= read -r fid; do
+          while IFS= read -r fname; do
             cd temp_downloads
-            for f in *"${fid}".*; do
-              [ -f "$f" ] || continue
-              echo "Remuxing $f..."
-              out="fixed_$f"
-              ffmpeg -hide_banner -loglevel warning -stats -i "$f" -c copy "$out" -y
-              if [ $? -eq 0 ]; then
-                rm "$f"
-                mv "$out" "$f"
-                echo "Remux successful for $f"
-              else
-                echo "Remux failed for $f"
-              fi
-              break
-            done
+            echo "Remuxing $fname..."
+            out="fixed_$fname"
+            ffmpeg -hide_banner -loglevel warning -stats -i "$fname" -c copy "$out" -y
+            if [ $? -eq 0 ]; then rm "$fname" && mv "$out" "$fname"; else echo "Remux failed for $fname"; fi
             cd ..
-          done < video_format_ids.txt
-          rm video_format_ids.txt
+          done < videos_to_remux.txt
+          rm videos_to_remux.txt
 
       - name: Create ZIP & Split file
         run: |
