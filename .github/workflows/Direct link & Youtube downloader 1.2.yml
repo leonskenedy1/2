@@ -84,7 +84,9 @@ jobs:
           done < tasks.txt
 
           if [ -f selected_formats.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --progress-template '%(progress.fragment_index)s'"
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
+            PROGRESS_TEMPLATE="%(progress._percent_str)s of %(progress._total_bytes_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s (frag %(progress.fragment_index)s/%(progress.fragment_count)s)"
+
             while read -r entry; do
               url=$(echo "$entry" | jq -r '.url')
               video_id=$(echo "$entry" | jq -r '.video_id')
@@ -96,12 +98,26 @@ jobs:
               for fid in $(echo "$formats" | jq -r 'keys[]'); do
                 ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
                 outname="${title}_${fid}.%(ext)s"
-                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url" 2>&1 | awk '{
-                  if ($0 ~ /^[0-9]+$/) {
-                    if ($0 != last_num) print;
-                    last_num = $0
-                  } else print
-                }'
+
+                # اجرای yt-dlp و فیلتر یک خط در ثانیه
+                last_time=0
+                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
+                  --progress-delta 1 \
+                  --progress-template "$PROGRESS_TEMPLATE" \
+                  "$url" 2>&1 | while IFS= read -r line; do
+                  # اگر خط حاوی اطلاعات حیاتی (شروع/پایان) است، بلافاصله چاپ کن
+                  if echo "$line" | grep -Eq '\[download\] Destination|has already been downloaded|100%'; then
+                    echo "$line"
+                    continue
+                  fi
+                  # در غیر این صورت، فقط یک خط در ثانیه چاپ کن
+                  current_time=$(date +%s)
+                  if [ "$current_time" -gt "$last_time" ]; then
+                    echo "$line"
+                    last_time=$current_time
+                  fi
+                done
+
                 dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
                 [ -z "$dl_file" ] && continue
                 [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
