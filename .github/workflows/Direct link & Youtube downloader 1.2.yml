@@ -99,24 +99,10 @@ jobs:
                 ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
                 outname="${title}_${fid}.%(ext)s"
 
-                # اجرای yt-dlp و فیلتر یک خط در ثانیه
-                last_time=0
-                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
+                stdbuf -oL yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
                   --progress-delta 1 \
                   --progress-template "$PROGRESS_TEMPLATE" \
-                  "$url" 2>&1 | while IFS= read -r line; do
-                  # اگر خط حاوی اطلاعات حیاتی (شروع/پایان) است، بلافاصله چاپ کن
-                  if echo "$line" | grep -Eq '\[download\] Destination|has already been downloaded|100%'; then
-                    echo "$line"
-                    continue
-                  fi
-                  # در غیر این صورت، فقط یک خط در ثانیه چاپ کن
-                  current_time=$(date +%s)
-                  if [ "$current_time" -gt "$last_time" ]; then
-                    echo "$line"
-                    last_time=$current_time
-                  fi
-                done
+                  "$url"
 
                 dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
                 [ -z "$dl_file" ] && continue
