@@ -60,6 +60,9 @@ jobs:
 
       - name: Select format (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        env:
+          JQ_VIDEO_SCRIPT: ZGVmIGNvbWJpbmVkOiBbLmZvcm1hdHNbXSB8IHNlbGVjdCgudmNvZGVjICE9ICJub25lIiBhbmQgLmFjb2RlYyAhPSAibm9uZSIpXTsKaWYgY29tYmluZWQgfCBsZW5ndGggPT0gMCB0aGVuIGVtcHR5IGVsc2UKICAoaWYgJGhlaWdodCA9PSAibWF4IiB0aGVuIGNvbWJpbmVkIHwgbWF4X2J5KC5oZWlnaHQsIC5mcHMpIHwgLmZvcm1hdF9pZAogIGVsaWYgJGhlaWdodCA9PSAibWluIiB0aGVuIGNvbWJpbmVkIHwgbWluX2J5KC5oZWlnaHQsIC5mcHMpIHwgLmZvcm1hdF9pZAogIGVsc2UKICAgIChjb21iaW5lZCB8IG1hcChzZWxlY3QoLmhlaWdodCA9PSAoJGhlaWdodCB8IHRvbnVtYmVyKSkpIGFzICRzYW1lX2hlaWdodCB8CiAgICBpZiAoJHNhbWVfaGVpZ2h0IHwgbGVuZ3RoKSA+IDAgdGhlbgogICAgICAoaWYgJGZwcyA+IDAgdGhlbgogICAgICAgICgoJHNhbWVfaGVpZ2h0IHwgbWFwKHNlbGVjdCguZnBzID09ICRmcHMpKSBhcyAkZXhhY3QgfAogICAgICAgICBpZiAoJGV4YWN0IHwgbGVuZ3RoKSA+IDAgdGhlbiAkZXhhY3RbMF0uZm9ybWF0X2lkCiAgICAgICAgIGVsc2UgJHNhbWVfaGVpZ2h0IHwgbWF4X2J5KC5mcHMpIHwgLmZvcm1hdF9pZCBlbmQpCiAgICAgIGVsc2UgJHNhbWVfaGVpZ2h0IHwgbWF4X2J5KC5mcHMpIHwgLmZvcm1hdF9pZCBlbmQpCiAgICBlbHNlCiAgICAgIChjb21iaW5lZCB8IHNvcnRfYnkoKC5oZWlnaHQgLSAoJGhlaWdodHx0b251bWJlcikgfCBhYnMpLCAuaGVpZ2h0KSB8IC5bMF0uaGVpZ2h0KSBhcyAkY2xvc2VzdF9oZWlnaHQgfAogICAgICAoY29tYmluZWQgfCBtYXAoc2VsZWN0KC5oZWlnaHQgPT0gJGNsb3Nlc3RfaGVpZ2h0KSkgfCBtYXhfYnkoLmZwcykgfCAuZm9ybWF0X2lkKQogICAgZW5kCiAgZW5kKQplbmQ=
+          JQ_AUDIO_SCRIPT: ZGVmIGF1ZGlvOiBbLmZvcm1hdHNbXSB8IHNlbGVjdCgudmNvZGVjID09ICJub25lIiBhbmQgLmFjb2RlYyAhPSAibm9uZSIpXTsKaWYgYXVkaW8gfCBsZW5ndGggPT0gMCB0aGVuIGVtcHR5IGVsc2UKICAoaWYgJGJyID09ICJtYXgiIHRoZW4gYXVkaW8gfCBtYXhfYnkoLmFiciAvLyAudGJyKSB8IC5mb3JtYXRfaWQKICBlbGlmICRiciA9PSAibWluIiB0aGVuIGF1ZGlvIHwgbWluX2J5KC5hYnIgLy8gLnRicikgfCAuZm9ybWF0X2lkCiAgZWxzZQogICAgKGF1ZGlvIHwgc29ydF9ieSgoLmFiciAvLyAudGJyKSkgfAogICAgIG1hcCh7aWQ6IC5mb3JtYXRfaWQsIGJyOiAoLmFiciAvLyAudGJyKX0pIHwKICAgICBzb3J0X2J5KC5icikgfAogICAgIG1pbl9ieSgoLmJyIC0gKCRicnx0b251bWJlcikgfCBhYnMpKSB8IC5pZCkKICBlbmQpCmVuZA==
         run: |
           set +e
           export PATH="$HOME/.deno/bin:$PATH"
@@ -67,40 +70,8 @@ jobs:
           is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
           get_video_id() { echo "$1" | sed -n 's/.*\(v=\|youtu\.be\/\)\([a-zA-Z0-9_-]\{11\}\).*/\2/p'; }
 
-          cat << 'JQVID' > /tmp/select_video.jq
-def combined: [.formats[] | select(.vcodec != "none" and .acodec != "none")];
-if combined | length == 0 then empty else
-  (if $height == "max" then combined | max_by(.height, .fps) | .format_id
-  elif $height == "min" then combined | min_by(.height, .fps) | .format_id
-  else
-    (combined | map(select(.height == ($height | tonumber)))) as $same_height |
-    if ($same_height | length) > 0 then
-      (if $fps > 0 then
-        (($same_height | map(select(.fps == $fps))) as $exact |
-         if ($exact | length) > 0 then $exact[0].format_id
-         else $same_height | max_by(.fps) | .format_id end)
-      else $same_height | max_by(.fps) | .format_id end)
-    else
-      (combined | sort_by((.height - ($height|tonumber) | abs), .height) | .[0].height) as $closest_height |
-      (combined | map(select(.height == $closest_height)) | max_by(.fps) | .format_id)
-    end
-  end)
-end
-JQVID
-
-          cat << 'JQAUD' > /tmp/select_audio.jq
-def audio: [.formats[] | select(.vcodec == "none" and .acodec != "none")];
-if audio | length == 0 then empty else
-  (if $br == "max" then audio | max_by(.abr // .tbr) | .format_id
-  elif $br == "min" then audio | min_by(.abr // .tbr) | .format_id
-  else
-    (audio | sort_by((.abr // .tbr)) |
-     map({id: .format_id, br: (.abr // .tbr)}) |
-     sort_by(.br) |
-     min_by((.br - ($br|tonumber) | abs)) | .id)
-  end)
-end
-JQAUD
+          echo "$JQ_VIDEO_SCRIPT" | base64 -d > /tmp/select_video.jq
+          echo "$JQ_AUDIO_SCRIPT" | base64 -d > /tmp/select_audio.jq
 
           echo "[" > selected_formats.json
           first_entry=true
