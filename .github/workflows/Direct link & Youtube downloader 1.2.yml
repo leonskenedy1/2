@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Enter URLs & Commands'
+        description: 'Enter "URL" "v/a" "video resolution/audio bitrate" "video FPS (optional)"'
         required: true
 
 jobs:
@@ -92,15 +92,6 @@ jobs:
               continue
             fi
 
-            COMBINED=$(jq '[.formats[] | select(.vcodec != "none" and .acodec != "none")]' "$TEMP_JSON")
-            AUDIO_ONLY=$(jq '[.formats[] | select(.vcodec == "none" and .acodec != "none")]' "$TEMP_JSON")
-            if [ -z "$COMBINED" ] || [ "$COMBINED" = "[]" ]; then
-              echo "WARNING: No combined (video+audio) formats found for $url"
-            fi
-            if [ -z "$AUDIO_ONLY" ] || [ "$AUDIO_ONLY" = "[]" ]; then
-              echo "WARNING: No audio-only formats found for $url"
-            fi
-
             if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
             declare -a groups
             i=0
@@ -123,44 +114,65 @@ jobs:
             for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
 
             declare -A formats_to_download
+
             for grp in "${unique_groups[@]}"; do
               read -r gtype gval1 gval2 <<< "$grp"
+
               if [[ "$gtype" == "v" ]]; then
                 if [[ "$gval1" == "all" ]]; then
-                  all_ids=$(echo "$COMBINED" | jq -r '.[].format_id')
+                  all_ids=$(jq -r '[.formats[] | select(.vcodec != "none" and .acodec != "none") | .format_id] | join(" ")' "$TEMP_JSON")
                   for fid in $all_ids; do formats_to_download["$fid"]="video"; done
                   continue
                 fi
-                case "$gval1" in
-                  max) fid=$(echo "$COMBINED" | jq -r 'max_by(.height, .fps) | .format_id');;
-                  min) fid=$(echo "$COMBINED" | jq -r 'min_by(.height, .fps) | .format_id');;
-                  *)
-                    height="$gval1"; fps="${gval2:-0}"
-                    heights=$(echo "$COMBINED" | jq '[.[].height] | unique | sort')
-                    chosen_height=$(echo "$heights" | jq --argjson h "$height" 'map({h:., d:(. - $h | abs)}) | sort_by(.d, .h) | first.h')
-                    matching=$(echo "$COMBINED" | jq --argjson h "$chosen_height" 'map(select(.height == $h))')
-                    if [ "$fps" -gt 0 ]; then
-                      exact=$(echo "$matching" | jq --argjson f "$fps" 'map(select(.fps == $f))')
-                      if [ "$(echo "$exact" | jq 'length')" -gt 0 ]; then fid=$(echo "$exact" | jq -r 'first.format_id'); else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
-                    else fid=$(echo "$matching" | jq -r 'max_by(.fps) | .format_id'); fi
-                    ;;
-                esac
+                if ! fid=$(jq -r --argjson height "${gval1}" --argjson fps "${gval2:-0}" '
+                  def combined: [.formats[] | select(.vcodec != "none" and .acodec != "none")];
+                  if combined | length == 0 then empty else
+                    (if $height == "max" then combined | max_by(.height, .fps) | .format_id
+                    elif $height == "min" then combined | min_by(.height, .fps) | .format_id
+                    else
+                      (combined | map(select(.height == ($height | tonumber))) as $same_height |
+                      if ($same_height | length) > 0 then
+                        (if $fps > 0 then
+                          (($same_height | map(select(.fps == $fps))) as $exact | if ($exact | length) > 0 then $exact[0].format_id else $same_height | max_by(.fps) | .format_id end)
+                        else $same_height | max_by(.fps) | .format_id end)
+                      else
+                        (combined | sort_by((.height - ($height|tonumber) | abs), .height) | .[0].height) as $closest_height |
+                        (combined | map(select(.height == $closest_height)) | max_by(.fps) | .format_id)
+                      end)
+                    end
+                  ' "$TEMP_JSON" 2>jq_error.log); then
+                  echo "ERROR: jq failed for video format selection for group $grp"
+                  cat jq_error.log
+                  continue
+                fi
+                if [ -z "$fid" ]; then
+                  echo "WARNING: No suitable video format found for $grp"
+                  continue
+                fi
                 formats_to_download["$fid"]="video"
               else
                 if [[ "$gval1" == "all" ]]; then
-                  all_ids=$(echo "$AUDIO_ONLY" | jq -r '.[].format_id')
+                  all_ids=$(jq -r '[.formats[] | select(.vcodec == "none" and .acodec != "none") | .format_id] | join(" ")' "$TEMP_JSON")
                   for fid in $all_ids; do formats_to_download["$fid"]="audio"; done
                   continue
                 fi
-                case "$gval1" in
-                  max) fid=$(echo "$AUDIO_ONLY" | jq -r 'max_by(.abr // .tbr) | .format_id');;
-                  min) fid=$(echo "$AUDIO_ONLY" | jq -r 'min_by(.abr // .tbr) | .format_id');;
-                  *)
-                    bitrate="$gval1"
-                    bitrates=$(echo "$AUDIO_ONLY" | jq '[.[].abr // .tbr] | unique | sort')
-                    chosen_bitrate=$(echo "$bitrates" | jq --argjson b "$bitrate" 'map({br:., d:(. - $b | abs)}) | sort_by(.d, .br) | first.br')
-                    fid=$(echo "$AUDIO_ONLY" | jq -r --argjson br "$chosen_bitrate" 'map(select((.abr // .tbr) == $br)) | first.format_id');;
-                esac
+                if ! fid=$(jq -r --argjson br "${gval1}" '
+                  def audio: [.formats[] | select(.vcodec == "none" and .acodec != "none")];
+                  if audio | length == 0 then empty else
+                    (if $br == "max" then audio | max_by(.abr // .tbr) | .format_id
+                    elif $br == "min" then audio | min_by(.abr // .tbr) | .format_id
+                    else
+                      (audio | sort_by((.abr // .tbr)) | (map({id: .format_id, br: (.abr // .tbr)}) | sort_by(.br) | (min_by((.br - ($br|tonumber) | abs)) | .id)))
+                    end)
+                  end' "$TEMP_JSON" 2>jq_error.log); then
+                  echo "ERROR: jq failed for audio format selection for group $grp"
+                  cat jq_error.log
+                  continue
+                fi
+                if [ -z "$fid" ]; then
+                  echo "WARNING: No suitable audio format found for $grp"
+                  continue
+                fi
                 formats_to_download["$fid"]="audio"
               fi
             done
@@ -175,7 +187,7 @@ jobs:
             done
             echo "}}" >> selected_formats.json
 
-            rm -f "$TEMP_JSON" error.log
+            rm -f "$TEMP_JSON" error.log jq_error.log
           done < tasks.txt
           echo "]" >> selected_formats.json
 
