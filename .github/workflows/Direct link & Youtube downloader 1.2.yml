@@ -11,46 +11,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Parse input (Is it YouTube?)
         id: parse
         run: |
           INPUT="${{ github.event.inputs.url }}"
-          IFS=' ' read -ra TOKENS <<< "$INPUT"
-          current_url=""
-          current_opts=()
-          > tasks.txt
-          for token in "${TOKENS[@]}"; do
-            if [[ "$token" =~ ^https?:// ]]; then
-              if [ -n "$current_url" ]; then
-                echo "$current_url ${current_opts[*]}" >> tasks.txt
-              fi
-              current_url="$token"
-              current_opts=()
-            else
-              current_opts+=("$token")
-            fi
-          done
-          if [ -n "$current_url" ]; then
-            echo "$current_url ${current_opts[*]}" >> tasks.txt
-          fi
-          if grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)' tasks.txt; then
-            echo "IS_YOUTUBE=true" >> $GITHUB_OUTPUT
-          else
-            echo "IS_YOUTUBE=false" >> $GITHUB_OUTPUT
-          fi
-
+          python3 -c "
+import re
+tokens = INPUT.split()
+tasks = []
+current_url = None
+current_opts = []
+for t in tokens:
+    if re.match(r'^https?://', t):
+        if current_url:
+            tasks.append((current_url, ' '.join(current_opts)))
+        current_url = t
+        current_opts = []
+    else:
+        current_opts.append(t)
+if current_url:
+    tasks.append((current_url, ' '.join(current_opts)))
+with open('tasks.txt','w') as f:
+    for url, opts in tasks:
+        f.write(f'{url} {opts}\n')
+"
       - name: Install tools (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
         run: |
           if ! command -v yt-dlp &> /dev/null; then
             sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
             sudo chmod a+rx /usr/local/bin/yt-dlp
-          fi
-          if ! command -v jq &> /dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq jq
           fi
           if ! command -v deno &> /dev/null; then
             curl -fsSL https://deno.land/install.sh | sh -s -- -y
@@ -60,138 +51,16 @@ jobs:
 
       - name: Select format (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
-        run: |
-          export PATH="$HOME/.deno/bin:$PATH"
-          python3 select_format.py
+        run: python3 Logic.py --select
 
       - name: Download
-        run: |
-          mkdir -p temp_downloads
-          is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
-
-          echo "[" > download_manifest.json
-          first_url=true
-          while IFS= read -r line; do
-            url="${line%% *}"
-            if ! is_youtube "$url"; then
-              cd temp_downloads
-              wget --progress=bar:force --content-disposition "$url"
-              dl_file=$(ls -1)
-              cd ..
-              [ "$first_url" = true ] && first_url=false || echo "," >> download_manifest.json
-              echo -n "{\"url\":\"$url\",\"is_youtube\":false,\"video_id\":\"\",\"files\":[{\"filename\":\"$dl_file\",\"type\":\"direct\"}]}" >> download_manifest.json
-            fi
-          done < tasks.txt
-
-          if [ -f download_queue.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
-            PROGRESS_TEMPLATE="%(progress._percent_str)s of %(progress._total_bytes_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s (frag %(progress.fragment_index)s/%(progress.fragment_count)s)"
-
-            total_items=$(jq length download_queue.json)
-            item_index=0
-            > all_files.jsonl
-
-            jq -c '.[]' download_queue.json | while read -r dl_item; do
-              url=$(echo "$dl_item" | jq -r '.url')
-              title=$(echo "$dl_item" | jq -r '.title')
-              video_id=$(echo "$dl_item" | jq -r '.video_id')
-              fid=$(echo "$dl_item" | jq -r '.format_id')
-              ftype=$(echo "$dl_item" | jq -r '.type')
-              delay_after=$(echo "$dl_item" | jq -r '.delay_after')
-              outname="${title}_${fid}.%(ext)s"
-
-              echo "[$((item_index+1))/$total_items] Downloading $ftype format $fid for $title"
-              stdbuf -oL yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" \
-                --progress-delta 1 \
-                --progress-template "$PROGRESS_TEMPLATE" \
-                "$url"
-
-              dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
-              if [ -n "$dl_file" ]; then
-                echo "{\"url\":\"$url\",\"title\":\"$title\",\"video_id\":\"$video_id\",\"type\":\"$ftype\",\"filename\":\"$(basename "$dl_file")\",\"is_youtube\":true}" >> all_files.jsonl
-              fi
-
-              item_index=$((item_index + 1))
-              if [ "$item_index" -lt "$total_items" ] && [ "$(echo "$delay_after > 0" | bc)" -eq 1 ]; then
-                echo "Sleeping for $delay_after seconds..."
-                sleep "$delay_after"
-              fi
-            done
-
-            if [ -f all_files.jsonl ]; then
-              jq -s 'group_by(.url + "|" + .title) | map({
-                url: .[0].url,
-                is_youtube: true,
-                video_id: .[0].video_id,
-                title: .[0].title,
-                files: map({filename: .filename, type: .type})
-              })' all_files.jsonl > grouped.json
-              jq -c '.[]' grouped.json > grouped_lines.jsonl
-              first_grp=true
-              while IFS= read -r grp; do
-                [ "$first_grp" = true ] && first_grp=false || echo "," >> download_manifest.json
-                echo -n "$grp" >> download_manifest.json
-              done < grouped_lines.jsonl
-              rm -f grouped.json grouped_lines.jsonl all_files.jsonl
-            fi
-          fi
-          echo "]" >> download_manifest.json
+        run: python3 Logic.py --download
 
       - name: Remux (YouTube video only)
-        if: steps.parse.outputs.IS_YOUTUBE == 'true'
-        run: |
-          if [ ! -f download_manifest.json ]; then
-            echo "No manifest, skipping remux."
-            exit 0
-          fi
-          jq -r '.[] | select(.is_youtube == true) | .files[] | select(.type == "video") | .filename' download_manifest.json > videos_to_remux.txt
-          if [ ! -s videos_to_remux.txt ]; then
-            echo "No video files to remux."
-            exit 0
-          fi
-          while IFS= read -r fname; do
-            cd temp_downloads
-            echo "Remuxing $fname..."
-            out="fixed_$fname"
-            ffmpeg -hide_banner -loglevel warning -stats -i "$fname" -c copy "$out" -y
-            if [ $? -eq 0 ]; then rm "$fname" && mv "$out" "$fname"; else echo "Remux failed for $fname"; fi
-            cd ..
-          done < videos_to_remux.txt
-          rm videos_to_remux.txt
+        run: python3 Logic.py --remux
 
       - name: Create ZIP & Split file
-        run: |
-          mkdir -p final_downloads
-          jq -c '.[]' download_manifest.json | while read -r entry; do
-            url=$(echo "$entry" | jq -r '.url')
-            is_yt=$(echo "$entry" | jq -r '.is_youtube')
-            if [ "$is_yt" = "false" ]; then
-              fname=$(echo "$entry" | jq -r '.files[0].filename')
-              cd temp_downloads
-              zip -s 99m -r "../final_downloads/${fname}.zip" "$fname"
-              cd ..
-            else
-              title=$(echo "$entry" | jq -r '.title')
-              video_files=$(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename')
-              audio_files=$(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename')
-              if [ -n "$video_files" ]; then
-                mkdir -p "temp_downloads/${title}_videos"
-                while IFS= read -r vf; do
-                  cp "temp_downloads/$vf" "temp_downloads/${title}_videos/"
-                done <<< "$video_files"
-                zip -s 99m -r "final_downloads/${title}_videos.zip" "temp_downloads/${title}_videos"
-                rm -rf "temp_downloads/${title}_videos"
-              fi
-              if [ -n "$audio_files" ]; then
-                mkdir -p "temp_downloads/${title}_audios"
-                while IFS= read -r af; do
-                  cp "temp_downloads/$af" "temp_downloads/${title}_audios/"
-                done <<< "$audio_files"
-                zip -s 99m -r "final_downloads/${title}_audios.zip" "temp_downloads/${title}_audios"
-                rm -rf "temp_downloads/${title}_audios"
-              fi
-            fi
-          done
+        run: python3 Logic.py --zip
 
       - name: Upload to download folder
         env:
@@ -204,24 +73,19 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 524288000
-
           if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
             echo "No files to upload."
             exit 0
           fi
-
           FILES=(downloads/*)
           total=${#FILES[@]}
           BATCH=19
           start=0
-
           while [ $start -lt $total ]; do
             end=$(( start + BATCH ))
-            if [ $end -gt $total ]; then end=$total; fi
+            [ $end -gt $total ] && end=$total
             git add "${FILES[@]:start:end-start}"
             git commit -m "Add parts $(($start+1))-$end [skip ci]"
-            git push origin "$BRANCH"
+            git push origin $BRANCH
             start=$end
           done
-
-          echo "All files uploaded to the 'downloads' folder."
