@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/.deno/bin:$PATH"
-          python3 -c "
+          cat << 'PYEOF' > select_format.py
 import subprocess, sys, json
 
 YTDLP_BASE = 'yt-dlp --cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress'
@@ -112,7 +112,7 @@ with open('tasks.txt') as f:
                 unique_groups.append(g)
         tempfile = f'temp_{video_id}.json'
         try:
-            subprocess.run(f'{YTDLP_BASE} -j \"{url}\" > {tempfile}', shell=True, check=True, stderr=subprocess.PIPE)
+            subprocess.run(f'{YTDLP_BASE} -j "{url}" > {tempfile}', shell=True, check=True, stderr=subprocess.PIPE)
         except subprocess.CalledProcessError as e:
             print(f'ERROR: yt-dlp failed for {url}: {e.stderr.decode()}')
             continue
@@ -173,7 +173,9 @@ with open('tasks.txt') as f:
 
 with open('selected_formats.json', 'w') as outfile:
     json.dump(selected, outfile)
-"
+PYEOF
+          python3 select_format.py
+          rm select_format.py
 
       - name: Download
         run: |
