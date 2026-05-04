@@ -98,9 +98,12 @@ with open('tasks.txt') as f:
                     fid = best['format_id']
                 formats_to_download[fid] = 'audio'
 
+        title = data.get('title', video_id)
+
         entry = {
             'url': url,
             'video_id': video_id,
+            'title': title,
             'formats': formats_to_download
         }
         selected.append(entry)
