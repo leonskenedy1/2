@@ -16,14 +16,6 @@ def try_parse_delay(tokens, i):
         return (parse_duration(tokens[i], tokens[i+1]), i + 2)
     return None
 
-def skip_delays(tokens, i):
-    while i < len(tokens):
-        res = try_parse_delay(tokens, i)
-        if res is None:
-            break
-        i = res[1]
-    return i
-
 def select_formats(tasks_file):
     output = []
     with open(tasks_file) as f:
@@ -59,18 +51,28 @@ def select_formats(tasks_file):
                 if token in ('v', 'a'):
                     typ = token
                     i += 1
-                    i = skip_delays(opts, i)
-                    val1 = 'max' if i >= len(opts) else opts[i]
-                    i += 1 if i < len(opts) else 0
-                    if typ == 'v':
-                        if val1 == '2k': val1 = '1440'
-                        elif val1 == '4k': val1 = '2160'
-                    val2 = ''
-                    if typ == 'v' and val1.isdigit():
-                        i = skip_delays(opts, i)
-                        if i < len(opts) and opts[i].isdigit():
-                            val2 = opts[i]
-                            i += 1
+                    if i >= len(opts):
+                        val1 = 'max'
+                        val2 = ''
+                    else:
+                        val1 = opts[i]
+                        i += 1
+                        if typ == 'v':
+                            if val1 == '2k': val1 = '1440'
+                            elif val1 == '4k': val1 = '2160'
+                        val2 = ''
+                        if typ == 'v' and val1.isdigit():
+                            saved_i = i
+                            if i < len(opts) and opts[i].isdigit():
+                                val2 = opts[i]
+                                i += 1
+                                while i < len(opts):
+                                    res = try_parse_delay(opts, i)
+                                    if res is None:
+                                        break
+                                    i = res[1]
+                            else:
+                                pass
                     internal_delay = 0.0
                     if val1 == 'all' and i < len(opts) and opts[i].startswith('('):
                         expr = ''
@@ -98,6 +100,7 @@ def select_formats(tasks_file):
                         i = res[1]
                     groups.append({'type':typ,'val1':val1,'val2':val2,'internal_delay':internal_delay,'delay_after':delay_after})
                     first_group = False
+
                 elif token == 'all':
                     i += 1
                     internal_delay = 0.0
@@ -206,20 +209,23 @@ def download_and_manifest():
         fid = item['format_id']
         ftype = item['type']
         delay_after = item['delay_after']
-        outname = f"{title}_{fid}.%(ext)s"
+
+        out_pattern = f"{title}_{fid}.%(ext)s"
         print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}")
 
-        cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "temp_downloads/{outname}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
+        cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "temp_downloads/{out_pattern}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
         subprocess.run(cmd, shell=True, check=True)
 
-        pattern = f"temp_downloads/{title}_{fid}.*"
-        files = glob.glob(pattern)
-        if files:
-            dl_file = os.path.basename(files[0])
+        predicted_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "temp_downloads/{out_pattern}" "{url}"'
+        predicted = subprocess.check_output(predicted_cmd, shell=True).decode().strip()
+        if os.path.exists(predicted):
+            dl_file = os.path.basename(predicted)
             key = f"{url}|{title}"
             if key not in manifest_entries:
                 manifest_entries[key] = {'url':url,'is_youtube':True,'video_id':video_id,'title':title,'files':[]}
             manifest_entries[key]['files'].append({'filename':dl_file,'type':ftype})
+        else:
+            print(f"WARNING: File {predicted} not found after download!")
 
         if idx < total - 1 and delay_after > 0:
             print(f"Sleeping for {delay_after} seconds...")
