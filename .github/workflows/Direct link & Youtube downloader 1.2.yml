@@ -11,31 +11,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Parse input (Is it YouTube?)
         id: parse
         run: |
           INPUT="${{ github.event.inputs.url }}"
-          python3 -c "
-import re
-tokens = INPUT.split()
-tasks = []
-current_url = None
-current_opts = []
-for t in tokens:
-    if re.match(r'^https?://', t):
-        if current_url:
-            tasks.append((current_url, ' '.join(current_opts)))
-        current_url = t
-        current_opts = []
-    else:
-        current_opts.append(t)
-if current_url:
-    tasks.append((current_url, ' '.join(current_opts)))
-with open('tasks.txt','w') as f:
-    for url, opts in tasks:
-        f.write(f'{url} {opts}\n')
-"
+          IFS=' ' read -ra TOKENS <<< "$INPUT"
+          current_url=""
+          current_opts=()
+          > tasks.txt
+          for token in "${TOKENS[@]}"; do
+            if [[ "$token" =~ ^https?:// ]]; then
+              if [ -n "$current_url" ]; then
+                echo "$current_url ${current_opts[*]}" >> tasks.txt
+              fi
+              current_url="$token"
+              current_opts=()
+            else
+              current_opts+=("$token")
+            fi
+          done
+          if [ -n "$current_url" ]; then
+            echo "$current_url ${current_opts[*]}" >> tasks.txt
+          fi
+          if grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)' tasks.txt; then
+            echo "IS_YOUTUBE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_YOUTUBE=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install tools (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
         run: |
@@ -73,19 +79,24 @@ with open('tasks.txt','w') as f:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 524288000
+
           if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
             echo "No files to upload."
             exit 0
           fi
+
           FILES=(downloads/*)
           total=${#FILES[@]}
           BATCH=19
           start=0
+
           while [ $start -lt $total ]; do
             end=$(( start + BATCH ))
             [ $end -gt $total ] && end=$total
             git add "${FILES[@]:start:end-start}"
             git commit -m "Add parts $(($start+1))-$end [skip ci]"
-            git push origin $BRANCH
+            git push origin "$BRANCH"
             start=$end
           done
+
+          echo "All files uploaded to the 'downloads' folder."
