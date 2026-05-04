@@ -87,9 +87,9 @@ jobs:
             YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
             PROGRESS_TEMPLATE="%(progress._percent_str)s of %(progress._total_bytes_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s (frag %(progress.fragment_index)s/%(progress.fragment_count)s)"
 
-            declare -A manifest_groups
             total_items=$(jq length download_queue.json)
             item_index=0
+            > all_files.jsonl
 
             jq -c '.[]' download_queue.json | while read -r dl_item; do
               url=$(echo "$dl_item" | jq -r '.url')
@@ -108,11 +108,7 @@ jobs:
 
               dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
               if [ -n "$dl_file" ]; then
-                key="${url}|${title}"
-                if [ -z "${manifest_groups[$key]}" ]; then
-                  manifest_groups[$key]="{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"title\":\"$title\",\"files\":[]}"
-                fi
-                manifest_groups[$key]=$(echo "${manifest_groups[$key]}" | jq -c --arg fname "$(basename "$dl_file")" --arg ftype "$ftype" '.files += [{filename: $fname, type: $ftype}]')
+                echo "{\"url\":\"$url\",\"title\":\"$title\",\"video_id\":\"$video_id\",\"type\":\"$ftype\",\"filename\":\"$(basename "$dl_file")\",\"is_youtube\":true}" >> all_files.jsonl
               fi
 
               item_index=$((item_index + 1))
@@ -122,11 +118,22 @@ jobs:
               fi
             done
 
-            first_grp=true
-            for key in "${!manifest_groups[@]}"; do
-              [ "$first_grp" = true ] && first_grp=false || echo "," >> download_manifest.json
-              echo -n "${manifest_groups[$key]}" >> download_manifest.json
-            done
+            if [ -f all_files.jsonl ]; then
+              jq -s 'group_by(.url + "|" + .title) | map({
+                url: .[0].url,
+                is_youtube: true,
+                video_id: .[0].video_id,
+                title: .[0].title,
+                files: map({filename: .filename, type: .type})
+              })' all_files.jsonl > grouped.json
+              jq -c '.[]' grouped.json > grouped_lines.jsonl
+              first_grp=true
+              while IFS= read -r grp; do
+                [ "$first_grp" = true ] && first_grp=false || echo "," >> download_manifest.json
+                echo -n "$grp" >> download_manifest.json
+              done < grouped_lines.jsonl
+              rm -f grouped.json grouped_lines.jsonl all_files.jsonl
+            fi
           fi
           echo "]" >> download_manifest.json
 
