@@ -84,7 +84,7 @@ jobs:
           done < tasks.txt
 
           if [ -f selected_formats.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --progress-template '[Fragment %(progress.id)s]'"
             while read -r entry; do
               url=$(echo "$entry" | jq -r '.url')
               video_id=$(echo "$entry" | jq -r '.video_id')
