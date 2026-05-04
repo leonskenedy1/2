@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader 1.2
+name: Direct link & Youtube downloader
 on:
   workflow_dispatch:
     inputs:
@@ -84,7 +84,7 @@ jobs:
           done < tasks.txt
 
           if [ -f selected_formats.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --progress-template ''"
             while read -r entry; do
               url=$(echo "$entry" | jq -r '.url')
               video_id=$(echo "$entry" | jq -r '.video_id')
