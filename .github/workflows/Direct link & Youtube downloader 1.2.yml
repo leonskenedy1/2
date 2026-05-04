@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader 1.2
+name: Direct link & Youtube downloader
 on:
   workflow_dispatch:
     inputs:
@@ -60,108 +60,9 @@ jobs:
 
       - name: Select format (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
-        env:
-          JQ_VIDEO_SCRIPT: ZGVmIGNvbWJpbmVkOiBbLmZvcm1hdHNbXSB8IHNlbGVjdCgudmNvZGVjICE9ICJub25lIiBhbmQgLmFjb2RlYyAhPSAibm9uZSIpXTsKaWYgY29tYmluZWQgfCBsZW5ndGggPT0gMCB0aGVuIGVtcHR5IGVsc2UKICAoaWYgJGhlaWdodCA9PSAibWF4IiB0aGVuIGNvbWJpbmVkIHwgbWF4X2J5KC5oZWlnaHQsIC5mcHMpIHwgLmZvcm1hdF9pZAogIGVsaWYgJGhlaWdodCA9PSAibWluIiB0aGVuIGNvbWJpbmVkIHwgbWluX2J5KC5oZWlnaHQsIC5mcHMpIHwgLmZvcm1hdF9pZAogIGVsc2UKICAgIChjb21iaW5lZCB8IG1hcChzZWxlY3QoLmhlaWdodCA9PSAoJGhlaWdodCB8IHRvbnVtYmVyKSkpIGFzICRzYW1lX2hlaWdodCB8CiAgICBpZiAoJHNhbWVfaGVpZ2h0IHwgbGVuZ3RoKSA+IDAgdGhlbgogICAgICAoaWYgJGZwcyA+IDAgdGhlbgogICAgICAgICgoJHNhbWVfaGVpZ2h0IHwgbWFwKHNlbGVjdCguZnBzID09ICRmcHMpKSBhcyAkZXhhY3QgfAogICAgICAgICBpZiAoJGV4YWN0IHwgbGVuZ3RoKSA+IDAgdGhlbiAkZXhhY3RbMF0uZm9ybWF0X2lkCiAgICAgICAgIGVsc2UgJHNhbWVfaGVpZ2h0IHwgbWF4X2J5KC5mcHMpIHwgLmZvcm1hdF9pZCBlbmQpCiAgICAgIGVsc2UgJHNhbWVfaGVpZ2h0IHwgbWF4X2J5KC5mcHMpIHwgLmZvcm1hdF9pZCBlbmQpCiAgICBlbHNlCiAgICAgIChjb21iaW5lZCB8IHNvcnRfYnkoKC5oZWlnaHQgLSAoJGhlaWdodHx0b251bWJlcikgfCBhYnMpLCAuaGVpZ2h0KSB8IC5bMF0uaGVpZ2h0KSBhcyAkY2xvc2VzdF9oZWlnaHQgfAogICAgICAoY29tYmluZWQgfCBtYXAoc2VsZWN0KC5oZWlnaHQgPT0gJGNsb3Nlc3RfaGVpZ2h0KSkgfCBtYXhfYnkoLmZwcykgfCAuZm9ybWF0X2lkKQogICAgZW5kCiAgZW5kKQplbmQ=
-          JQ_AUDIO_SCRIPT: ZGVmIGF1ZGlvOiBbLmZvcm1hdHNbXSB8IHNlbGVjdCgudmNvZGVjID09ICJub25lIiBhbmQgLmFjb2RlYyAhPSAibm9uZSIpXTsKaWYgYXVkaW8gfCBsZW5ndGggPT0gMCB0aGVuIGVtcHR5IGVsc2UKICAoaWYgJGJyID09ICJtYXgiIHRoZW4gYXVkaW8gfCBtYXhfYnkoLmFiciAvLyAudGJyKSB8IC5mb3JtYXRfaWQKICBlbGlmICRiciA9PSAibWluIiB0aGVuIGF1ZGlvIHwgbWluX2J5KC5hYnIgLy8gLnRicikgfCAuZm9ybWF0X2lkCiAgZWxzZQogICAgKGF1ZGlvIHwgc29ydF9ieSgoLmFiciAvLyAudGJyKSkgfAogICAgIG1hcCh7aWQ6IC5mb3JtYXRfaWQsIGJyOiAoLmFiciAvLyAudGJyKX0pIHwKICAgICBzb3J0X2J5KC5icikgfAogICAgIG1pbl9ieSgoLmJyIC0gKCRicnx0b251bWJlcikgfCBhYnMpKSB8IC5pZCkKICBlbmQpCmVuZA==
         run: |
-          set +e
           export PATH="$HOME/.deno/bin:$PATH"
-          YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
-          is_youtube() { echo "$1" | grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)'; }
-          get_video_id() { echo "$1" | sed -n 's/.*\(v=\|youtu\.be\/\)\([a-zA-Z0-9_-]\{11\}\).*/\2/p'; }
-
-          echo "$JQ_VIDEO_SCRIPT" | base64 -d > /tmp/select_video.jq
-          echo "$JQ_AUDIO_SCRIPT" | base64 -d > /tmp/select_audio.jq
-
-          echo "[" > selected_formats.json
-          first_entry=true
-          while IFS= read -r line; do
-            url="${line%% *}"
-            opts="${line#* }"
-            [ "$url" = "$opts" ] && opts=""
-            if ! is_youtube "$url"; then continue; fi
-            video_id=$(get_video_id "$url")
-            echo "Processing YouTube URL: $url"
-
-            TEMP_JSON="temp_${video_id}.json"
-            if ! yt-dlp $YTDLP_BASE -j "$url" > "$TEMP_JSON" 2>error.log; then
-              echo "ERROR: yt-dlp failed for $url. Details:"
-              cat error.log
-              rm -f "$TEMP_JSON" error.log
-              continue
-            fi
-            if [ ! -s "$TEMP_JSON" ]; then
-              echo "ERROR: Empty JSON file for $url. Skipping."
-              rm -f "$TEMP_JSON" error.log
-              continue
-            fi
-
-            if [ -z "$opts" ]; then spec_args=("v" "max"); else IFS=' ' read -ra spec_args <<< "$opts"; fi
-            declare -a groups
-            i=0
-            while [ $i -lt ${#spec_args[@]} ]; do
-              type="${spec_args[$i]}"; ((i++))
-              if [[ "$type" != "v" && "$type" != "a" ]]; then continue; fi
-              if [ $i -ge ${#spec_args[@]} ]; then val1="max"; val2=""; else
-                val1="${spec_args[$i]}"; ((i++))
-                if [[ "$type" == "v" ]]; then case "$val1" in 2k) val1=1440;; 4k) val1=2160;; esac; fi
-                val2=""
-                if [[ "$type" == "v" && "$val1" =~ ^[0-9]+$ && $i -lt ${#spec_args[@]} ]]; then
-                  next="${spec_args[$i]}"
-                  if [[ "$next" =~ ^[0-9]+$ ]]; then val2="$next"; ((i++)); fi
-                fi
-              fi
-              groups+=("$type $val1 $val2")
-            done
-
-            declare -A seen_group; unique_groups=()
-            for grp in "${groups[@]}"; do if [ -z "${seen_group[$grp]}" ]; then seen_group[$grp]=1; unique_groups+=("$grp"); fi; done
-
-            declare -A formats_to_download
-
-            for grp in "${unique_groups[@]}"; do
-              read -r gtype gval1 gval2 <<< "$grp"
-              if [[ "$gtype" == "v" ]]; then
-                if [[ "$gval1" == "all" ]]; then
-                  all_ids=$(jq -r '[.formats[] | select(.vcodec != "none" and .acodec != "none") | .format_id] | join(" ")' "$TEMP_JSON")
-                  for fid in $all_ids; do formats_to_download["$fid"]="video"; done
-                  continue
-                fi
-                fid=$(jq --argjson height "$gval1" --argjson fps "${gval2:-0}" -f /tmp/select_video.jq "$TEMP_JSON" 2>jq_error.log)
-                if [ -z "$fid" ]; then
-                  echo "ERROR: jq video selection failed for $grp. Check jq_error.log:"
-                  cat jq_error.log
-                  continue
-                fi
-                formats_to_download["$fid"]="video"
-              else
-                if [[ "$gval1" == "all" ]]; then
-                  all_ids=$(jq -r '[.formats[] | select(.vcodec == "none" and .acodec != "none") | .format_id] | join(" ")' "$TEMP_JSON")
-                  for fid in $all_ids; do formats_to_download["$fid"]="audio"; done
-                  continue
-                fi
-                fid=$(jq --argjson br "$gval1" -f /tmp/select_audio.jq "$TEMP_JSON" 2>jq_error.log)
-                if [ -z "$fid" ]; then
-                  echo "ERROR: jq audio selection failed for $grp. Check jq_error.log:"
-                  cat jq_error.log
-                  continue
-                fi
-                formats_to_download["$fid"]="audio"
-              fi
-            done
-
-            [ "$first_entry" = true ] && first_entry=false || echo "," >> selected_formats.json
-            echo -n "  {\"url\":\"$url\",\"video_id\":\"$video_id\",\"formats\":{" >> selected_formats.json
-            first_fid=true
-            for fid in "${!formats_to_download[@]}"; do
-              ftype="${formats_to_download[$fid]}"
-              [ "$first_fid" = true ] && first_fid=false || echo -n "," >> selected_formats.json
-              echo -n "\"$fid\":\"$ftype\"" >> selected_formats.json
-            done
-            echo "}}" >> selected_formats.json
-            rm -f "$TEMP_JSON" error.log jq_error.log
-          done < tasks.txt
-          echo "]" >> selected_formats.json
+          python3 select_format.py
 
       - name: Download
         run: |
