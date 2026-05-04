@@ -84,7 +84,7 @@ jobs:
           done < tasks.txt
 
           if [ -f selected_formats.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --progress-template '[Fragment %(progress.id)s]'"
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --progress-template '%(progress.fragment_index)s'"
             while read -r entry; do
               url=$(echo "$entry" | jq -r '.url')
               video_id=$(echo "$entry" | jq -r '.video_id')
@@ -96,7 +96,7 @@ jobs:
               for fid in $(echo "$formats" | jq -r 'keys[]'); do
                 ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
                 outname="${title}_${fid}.%(ext)s"
-                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url"
+                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url" 2>&1 | uniq
                 dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
                 [ -z "$dl_file" ] && continue
                 [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
