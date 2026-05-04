@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader
+name: Direct link & Youtube downloader 1.2
 on:
   workflow_dispatch:
     inputs:
