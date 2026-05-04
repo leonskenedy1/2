@@ -96,7 +96,12 @@ jobs:
               for fid in $(echo "$formats" | jq -r 'keys[]'); do
                 ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
                 outname="${title}_${fid}.%(ext)s"
-                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url" 2>&1 | uniq
+                yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url" 2>&1 | awk '{
+                  if ($0 ~ /^[0-9]+$/) {
+                    if ($0 != last_num) print;
+                    last_num = $0
+                  } else print
+                }'
                 dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
                 [ -z "$dl_file" ] && continue
                 [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
