@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader 1.2
+name: Direct link & Youtube downloader
 on:
   workflow_dispatch:
     inputs:
@@ -84,24 +84,23 @@ jobs:
           done < tasks.txt
 
           if [ -f selected_formats.json ]; then
-            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress"
+            YTDLP_BASE="--cookies cookies.txt --js-runtimes deno --remote-components ejs:npm"
             while read -r entry; do
               url=$(echo "$entry" | jq -r '.url')
               video_id=$(echo "$entry" | jq -r '.video_id')
+              title=$(echo "$entry" | jq -r '.title')
               formats=$(echo "$entry" | jq -r '.formats')
               [ "$first_url" = true ] && first_url=false || echo "," >> download_manifest.json
-              echo -n "{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"files\":[" >> download_manifest.json
+              echo -n "{\"url\":\"$url\",\"is_youtube\":true,\"video_id\":\"$video_id\",\"title\":\"$title\",\"files\":[" >> download_manifest.json
               first_file=true
               for fid in $(echo "$formats" | jq -r 'keys[]'); do
                 ftype=$(echo "$formats" | jq -r ".[\"$fid\"]")
-                outname="${video_id}_${fid}.mp4"
+                outname="${title}_${fid}.%(ext)s"
                 yt-dlp $YTDLP_BASE -f "$fid" -o "temp_downloads/${outname}" "$url"
-                if [ -f "temp_downloads/${outname}" ]; then
-                  [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
-                  echo -n "{\"filename\":\"${outname}\",\"type\":\"$ftype\"}" >> download_manifest.json
-                else
-                  echo "WARNING: File ${outname} not found, skipping"
-                fi
+                dl_file=$(ls "temp_downloads/${title}_${fid}".* 2>/dev/null | head -n1)
+                [ -z "$dl_file" ] && continue
+                [ "$first_file" = true ] && first_file=false || echo -n "," >> download_manifest.json
+                echo -n "{\"filename\":\"$(basename "$dl_file")\",\"type\":\"$ftype\"}" >> download_manifest.json
               done
               echo -n "]}" >> download_manifest.json
             done < <(jq -c '.[]' selected_formats.json)
@@ -134,24 +133,24 @@ jobs:
               zip -s 99m -r "../final_downloads/${fname}.zip" "$fname"
               cd ..
             else
-              video_id=$(echo "$entry" | jq -r '.video_id')
+              title=$(echo "$entry" | jq -r '.title')
               video_files=$(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename')
               audio_files=$(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename')
               if [ -n "$video_files" ]; then
-                mkdir -p "temp_downloads/${video_id}_videos"
-                for vf in $video_files; do
-                  cp "temp_downloads/$vf" "temp_downloads/${video_id}_videos/"
-                done
-                zip -s 99m -r "final_downloads/${video_id}_videos.zip" "temp_downloads/${video_id}_videos"
-                rm -rf "temp_downloads/${video_id}_videos"
+                mkdir -p "temp_downloads/${title}_videos"
+                while IFS= read -r vf; do
+                  cp "temp_downloads/$vf" "temp_downloads/${title}_videos/"
+                done <<< "$video_files"
+                zip -s 99m -r "final_downloads/${title}_videos.zip" "temp_downloads/${title}_videos"
+                rm -rf "temp_downloads/${title}_videos"
               fi
               if [ -n "$audio_files" ]; then
-                mkdir -p "temp_downloads/${video_id}_audios"
-                for af in $audio_files; do
-                  cp "temp_downloads/$af" "temp_downloads/${video_id}_audios/"
-                done
-                zip -s 99m -r "final_downloads/${video_id}_audios.zip" "temp_downloads/${video_id}_audios"
-                rm -rf "temp_downloads/${video_id}_audios"
+                mkdir -p "temp_downloads/${title}_audios"
+                while IFS= read -r af; do
+                  cp "temp_downloads/$af" "temp_downloads/${title}_audios/"
+                done <<< "$audio_files"
+                zip -s 99m -r "final_downloads/${title}_audios.zip" "temp_downloads/${title}_audios"
+                rm -rf "temp_downloads/${title}_audios"
               fi
             fi
           done
