@@ -63,9 +63,10 @@ def select_formats(tasks_file):
                         val2 = ''
                         if typ == 'v' and val1.isdigit():
                             if i < len(opts) and opts[i].isdigit():
+                                next_is_fps = True
                                 if i+1 < len(opts) and opts[i+1] in ('h','m','s'):
-                                    pass
-                                else:
+                                    next_is_fps = False
+                                if next_is_fps:
                                     val2 = opts[i]
                                     i += 1
                                     while i < len(opts):
@@ -98,7 +99,13 @@ def select_formats(tasks_file):
                             break
                         delay_after += res[0]
                         i = res[1]
-                    groups.append({'type':typ,'val1':val1,'val2':val2,'internal_delay':internal_delay,'delay_after':delay_after})
+                    groups.append({
+                        'type': typ,
+                        'val1': val1,
+                        'val2': val2,
+                        'internal_delay': internal_delay,
+                        'delay_after': delay_after
+                    })
                     first_group = False
 
                 elif token == 'all':
@@ -128,8 +135,8 @@ def select_formats(tasks_file):
                             break
                         delay_after += res[0]
                         i = res[1]
-                    groups.append({'type':'v','val1':'all','val2':'','internal_delay':internal_delay,'delay_after':0})
-                    groups.append({'type':'a','val1':'all','val2':'','internal_delay':internal_delay,'delay_after':delay_after})
+                    groups.append({'type': 'v', 'val1': 'all', 'val2': '', 'internal_delay': internal_delay, 'delay_after': 0})
+                    groups.append({'type': 'a', 'val1': 'all', 'val2': '', 'internal_delay': internal_delay, 'delay_after': delay_after})
                     first_group = False
                 else:
                     i += 1
@@ -139,57 +146,69 @@ def select_formats(tasks_file):
                 typ, val1, val2 = grp['type'], grp['val1'], grp.get('val2','')
                 internal, da = grp['internal_delay'], grp['delay_after']
                 if val1 == 'all':
-                    fmts = sorted((combined if typ=='v' else audio_only),
-                                  key=lambda x: (x.get('height',0), x.get('fps',0)) if typ=='v' else (x.get('abr') or x.get('tbr') or 0),
-                                  reverse=True)
+                    fmts = sorted(
+                        (combined if typ == 'v' else audio_only),
+                        key=lambda x: (x.get('height', 0), x.get('fps', 0)) if typ == 'v' else (x.get('abr') or x.get('tbr') or 0),
+                        reverse=True
+                    )
                     if not fmts:
                         print(f'WARNING: No formats for {typ} all in {url}')
                         continue
                     for idx, f in enumerate(fmts):
                         fid = f['format_id']
-                        delay = da if idx == len(fmts)-1 else internal
-                        downloads.append({'format_id':fid,'type':typ,'delay_after':delay})
+                        delay = da if idx == len(fmts) - 1 else internal
+                        downloads.append({'format_id': fid, 'type': typ, 'delay_after': delay})
                 else:
                     if val1 == 'max':
-                        fid = (max if typ=='v' else max)(combined if typ=='v' else audio_only,
-                            key=lambda x: (x.get('height',0), x.get('fps',0)) if typ=='v' else (x.get('abr') or x.get('tbr') or 0))['format_id']
+                        fid = (max if typ == 'v' else max)(
+                            combined if typ == 'v' else audio_only,
+                            key=lambda x: (x.get('height', 0), x.get('fps', 0)) if typ == 'v' else (x.get('abr') or x.get('tbr') or 0)
+                        )['format_id']
                     elif val1 == 'min':
-                        fid = (min if typ=='v' else min)(combined if typ=='v' else audio_only,
-                            key=lambda x: (x.get('height',0), x.get('fps',0)) if typ=='v' else (x.get('abr') or x.get('tbr') or 0))['format_id']
+                        fid = (min if typ == 'v' else min)(
+                            combined if typ == 'v' else audio_only,
+                            key=lambda x: (x.get('height', 0), x.get('fps', 0)) if typ == 'v' else (x.get('abr') or x.get('tbr') or 0)
+                        )['format_id']
                     else:
                         if typ == 'v':
                             target_h = int(val1)
                             target_fps = int(val2) if val2 else 0
-                            same_h = [f for f in combined if f.get('height')==target_h]
+                            same_h = [f for f in combined if f.get('height') == target_h]
                             if not same_h:
-                                closest = min(combined, key=lambda x: abs(x.get('height',0)-target_h))
-                                same_h = [f for f in combined if f.get('height')==closest['height']]
-                            if target_fps>0:
-                                exact = [f for f in same_h if f.get('fps')==target_fps]
-                                fid = exact[0]['format_id'] if exact else max(same_h, key=lambda x: x.get('fps',0))['format_id']
+                                closest = min(combined, key=lambda x: abs(x.get('height', 0) - target_h))
+                                same_h = [f for f in combined if f.get('height') == closest['height']]
+                            if target_fps > 0:
+                                exact = [f for f in same_h if f.get('fps') == target_fps]
+                                fid = exact[0]['format_id'] if exact else max(same_h, key=lambda x: x.get('fps', 0))['format_id']
                             else:
-                                fid = max(same_h, key=lambda x: x.get('fps',0))['format_id']
+                                fid = max(same_h, key=lambda x: x.get('fps', 0))['format_id']
                         else:
                             target_br = int(val1)
                             best = min(audio_only, key=lambda x: abs((x.get('abr') or x.get('tbr') or 0) - target_br))
                             fid = best['format_id']
-                    downloads.append({'format_id':fid,'type':typ,'delay_after':da})
+                    downloads.append({'format_id': fid, 'type': typ, 'delay_after': da})
 
-            entry = {'url':url,'video_id':video_id,'title':title,'downloads':downloads}
+            entry = {'url': url, 'video_id': video_id, 'title': title, 'downloads': downloads}
             output.append(entry)
 
-    with open('selected_formats.json','w') as f:
+    with open('selected_formats.json', 'w') as f:
         json.dump(output, f, indent=2)
 
     queue = []
     for entry in output:
         for dl in entry['downloads']:
-            queue.append({'url':entry['url'],'title':entry['title'],'video_id':entry['video_id'],
-                          'format_id':dl['format_id'],'type':dl['type'],'delay_after':dl['delay_after']})
+            queue.append({
+                'url': entry['url'],
+                'title': entry['title'],
+                'video_id': entry['video_id'],
+                'format_id': dl['format_id'],
+                'type': dl['type'],
+                'delay_after': dl['delay_after']
+            })
     if queue:
         queue[-1]['delay_after'] = 0.0
 
-    with open('download_queue.json','w') as f:
+    with open('download_queue.json', 'w') as f:
         json.dump(queue, f, indent=2)
 
 def download_and_manifest():
@@ -210,49 +229,44 @@ def download_and_manifest():
         ftype = item['type']
         delay_after = item['delay_after']
 
-        out_pattern = f"{title}_{fid}.%(ext)s"
+        out_template = f"temp_downloads/{title}_{fid}.%(ext)s"
         print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}", flush=True)
 
-        cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "temp_downloads/{out_pattern}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
+        cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
         subprocess.run(cmd, shell=True, check=True)
 
-        search_pattern = os.path.join('temp_downloads', f"{title}_{fid}.*")
-        matches = glob.glob(search_pattern)
-        if matches:
-            dl_file = os.path.basename(matches[0])
+        get_filename_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "{out_template}" "{url}"'
+        predicted = subprocess.check_output(get_filename_cmd, shell=True).decode().strip()
+
+        if os.path.exists(predicted):
+            dl_file = os.path.basename(predicted)
         else:
-            before = set(os.listdir('temp_downloads'))
-            after = set(os.listdir('temp_downloads'))
-            diff = after - before
-            if diff:
-                dl_file = list(diff)[0]
+            search_pattern = os.path.join('temp_downloads', f"{title}_{fid}.*")
+            matches = glob.glob(search_pattern)
+            if matches:
+                dl_file = os.path.basename(matches[0])
             else:
-                print("ERROR: Could not identify downloaded file after completion.", flush=True)
+                print(f"ERROR: Could not locate downloaded file for {title}_{fid}", flush=True)
                 continue
 
         key = f"{url}|{title}"
         if key not in manifest_entries:
-            manifest_entries[key] = {'url':url,'is_youtube':True,'video_id':video_id,'title':title,'files':[]}
-        manifest_entries[key]['files'].append({'filename':dl_file,'type':ftype})
+            manifest_entries[key] = {
+                'url': url,
+                'is_youtube': True,
+                'video_id': video_id,
+                'title': title,
+                'files': []
+            }
+        manifest_entries[key]['files'].append({'filename': dl_file, 'type': ftype})
 
         if idx < total - 1 and delay_after > 0:
             print(f"⏳ Pausing for {delay_after} seconds...", flush=True)
             time.sleep(delay_after)
 
     manifest = list(manifest_entries.values())
-    with open('temp_yt_manifest.json','w') as f:
+    with open('download_manifest.json', 'w') as f:
         json.dump(manifest, f, indent=2)
-
-    final_manifest = []
-    if os.path.exists('download_manifest.json') and os.path.getsize('download_manifest.json') > 0:
-        with open('download_manifest.json') as f:
-            try:
-                final_manifest = json.load(f)
-            except:
-                pass
-    final_manifest.extend(manifest)
-    with open('download_manifest.json','w') as f:
-        json.dump(final_manifest, f, indent=2)
     print("Manifest saved successfully.", flush=True)
 
 def remux_videos():
@@ -264,7 +278,7 @@ def remux_videos():
     for entry in manifest:
         if not entry.get('is_youtube'):
             continue
-        for file_info in entry.get('files',[]):
+        for file_info in entry.get('files', []):
             if file_info.get('type') != 'video':
                 continue
             fname = file_info['filename']
@@ -290,8 +304,8 @@ def create_zips():
             os.chdir('..')
         else:
             title = entry['title']
-            video_files = [f['filename'] for f in entry['files'] if f['type']=='video']
-            audio_files = [f['filename'] for f in entry['files'] if f['type']=='audio']
+            video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
+            audio_files = [f['filename'] for f in entry['files'] if f['type'] == 'audio']
             if video_files:
                 dest = f"temp_downloads/{title}_videos"
                 os.makedirs(dest, exist_ok=True)
