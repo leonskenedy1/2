@@ -218,14 +218,13 @@ def download_and_manifest(tasks_file):
     with open(tasks_file) as f:
         tasks = [line.strip() for line in f if line.strip()]
 
-    total_tasks = len(tasks)
     for idx, line in enumerate(tasks):
         parts = line.split()
         url = parts[0]
         if 'youtube.com/watch?v=' in url or 'youtu.be/' in url:
             continue
 
-        print(f"[{idx+1}/{total_tasks}] Downloading non-YouTube: {url}", flush=True)
+        print(f"[{idx+1}/{len(tasks)}] Downloading non-YouTube: {url}", flush=True)
         tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
         os.chdir(tmp_dir)
         subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
@@ -247,9 +246,7 @@ def download_and_manifest(tasks_file):
         with open('download_queue.json') as f:
             queue = json.load(f)
         total_yt = len(queue)
-        yt_idx = 0
-        for item in queue:
-            yt_idx += 1
+        for yt_idx, item in enumerate(queue, 1):
             url = item['url']
             title = item['title']
             video_id = item['video_id']
@@ -257,7 +254,9 @@ def download_and_manifest(tasks_file):
             ftype = item['type']
             delay_after = item['delay_after']
 
-            print(f"[{yt_idx}/{total_yt}] Downloading {ftype} format {fid} for {title}", flush=True)
+            long_type = 'video' if ftype == 'v' else 'audio'
+
+            print(f"[{yt_idx}/{total_yt}] Downloading {long_type} format {fid} for {title}", flush=True)
 
             tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
             out_template = os.path.join(tmp_dir, f"{title}_{fid}.%(ext)s")
@@ -271,14 +270,14 @@ def download_and_manifest(tasks_file):
                 key = f"{url}|{title}"
                 existing = next((e for e in manifest if e.get('url') == url and e.get('title') == title and e.get('is_youtube')), None)
                 if existing:
-                    existing['files'].append({'filename': dl_file, 'type': ftype})
+                    existing['files'].append({'filename': dl_file, 'type': long_type})
                 else:
                     manifest.append({
                         'url': url,
                         'is_youtube': True,
                         'video_id': video_id,
                         'title': title,
-                        'files': [{'filename': dl_file, 'type': ftype}]
+                        'files': [{'filename': dl_file, 'type': long_type}]
                     })
                 print(f"  -> Registered: {dl_file}", flush=True)
             else:
