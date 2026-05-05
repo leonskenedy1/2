@@ -213,7 +213,7 @@ def select_formats(tasks_file):
 
 def download_and_manifest():
     if not os.path.exists('download_queue.json'):
-        print("No download queue found.")
+        print("No download queue found.", flush=True)
         return
     with open('download_queue.json') as f:
         queue = json.load(f)
@@ -237,17 +237,22 @@ def download_and_manifest():
 
         get_filename_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "{out_template}" "{url}"'
         predicted = subprocess.check_output(get_filename_cmd, shell=True).decode().strip()
-
         if os.path.exists(predicted):
             dl_file = os.path.basename(predicted)
         else:
-            search_pattern = os.path.join('temp_downloads', f"{title}_{fid}.*")
+            search_pattern = os.path.join('temp_downloads', glob.escape(f"{title}_{fid}") + '.*')
             matches = glob.glob(search_pattern)
             if matches:
                 dl_file = os.path.basename(matches[0])
             else:
-                print(f"ERROR: Could not locate downloaded file for {title}_{fid}", flush=True)
-                continue
+                before = set(os.listdir('temp_downloads'))
+                after = set(os.listdir('temp_downloads'))
+                diff = after - before
+                if diff:
+                    dl_file = list(diff)[0]
+                else:
+                    print(f"ERROR: Could not locate downloaded file for {title}_{fid}", flush=True)
+                    continue
 
         key = f"{url}|{title}"
         if key not in manifest_entries:
@@ -261,7 +266,9 @@ def download_and_manifest():
         manifest_entries[key]['files'].append({'filename': dl_file, 'type': ftype})
 
         if idx < total - 1 and delay_after > 0:
-            print(f"⏳ Pausing for {delay_after} seconds...", flush=True)
+            mins = int(delay_after // 60)
+            secs = int(delay_after % 60)
+            print(f"Pausing for {mins} min {secs} sec...", flush=True)
             time.sleep(delay_after)
 
     manifest = list(manifest_entries.values())
