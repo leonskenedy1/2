@@ -1,4 +1,4 @@
-import subprocess, sys, json, re, os, glob, time, shutil, argparse
+import subprocess, sys, json, re, os, glob, time, shutil, argparse, tempfile
 
 YTDLP_BASE = 'yt-dlp --cookies cookies.txt --js-runtimes deno --remote-components ejs:npm'
 PROGRESS_TEMPLATE = "%(progress._percent_str)s of %(progress._total_bytes_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s (frag %(progress.fragment_index)s/%(progress.fragment_count)s)"
@@ -224,13 +224,16 @@ def download_and_manifest(tasks_file):
         url = parts[0]
         if 'youtube.com/watch?v=' in url or 'youtu.be/' in url:
             continue
+
         print(f"[{idx+1}/{total_tasks}] Downloading non-YouTube: {url}", flush=True)
-        os.chdir('temp_downloads')
+        tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
+        os.chdir(tmp_dir)
         subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
-        os.chdir('..')
-        dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
-                      key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)))
-        if dl_file:
+        os.chdir('../../..')
+        downloaded_files = os.listdir(tmp_dir)
+        if downloaded_files:
+            dl_file = downloaded_files[0]
+            shutil.move(os.path.join(tmp_dir, dl_file), os.path.join('temp_downloads', dl_file))
             manifest.append({
                 'url': url,
                 'is_youtube': False,
@@ -238,6 +241,7 @@ def download_and_manifest(tasks_file):
                 'title': os.path.splitext(dl_file)[0],
                 'files': [{'filename': dl_file, 'type': 'direct'}]
             })
+        shutil.rmtree(tmp_dir)
 
     if os.path.exists('download_queue.json'):
         with open('download_queue.json') as f:
@@ -253,48 +257,41 @@ def download_and_manifest(tasks_file):
             ftype = item['type']
             delay_after = item['delay_after']
 
-            out_template = f"temp_downloads/{title}_{fid}.%(ext)s"
-            
-            # پیش‌بینی نام فایل نهایی
-            pred_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "{out_template}" "{url}"'
-            predicted_name = subprocess.check_output(pred_cmd, shell=True).decode().strip()
-            
             print(f"[{yt_idx}/{total_yt}] Downloading {ftype} format {fid} for {title}", flush=True)
 
+            tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
+            out_template = os.path.join(tmp_dir, f"{title}_{fid}.%(ext)s")
             cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
             subprocess.run(cmd, shell=True, check=True)
 
-            # استفاده از نام پیش‌بینی‌شده
-            if os.path.exists(predicted_name):
-                dl_file = os.path.basename(predicted_name)
+            downloaded_files = os.listdir(tmp_dir)
+            if downloaded_files:
+                dl_file = downloaded_files[0]
+                shutil.move(os.path.join(tmp_dir, dl_file), os.path.join('temp_downloads', dl_file))
+                key = f"{url}|{title}"
+                existing = next((e for e in manifest if e.get('url') == url and e.get('title') == title and e.get('is_youtube')), None)
+                if existing:
+                    existing['files'].append({'filename': dl_file, 'type': ftype})
+                else:
+                    manifest.append({
+                        'url': url,
+                        'is_youtube': True,
+                        'video_id': video_id,
+                        'title': title,
+                        'files': [{'filename': dl_file, 'type': ftype}]
+                    })
+                print(f"  -> Registered: {dl_file}", flush=True)
             else:
-                # fallback: جدیدترین فایل
-                dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
-                              key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)))
-                if not dl_file:
-                    print("ERROR: Could not identify downloaded file!", flush=True)
-                    continue
-
-            key = f"{url}|{title}"
-            existing = next((e for e in manifest if e.get('url') == url and e.get('title') == title and e.get('is_youtube')), None)
-            if existing:
-                existing['files'].append({'filename': dl_file, 'type': ftype})
-            else:
-                manifest.append({
-                    'url': url,
-                    'is_youtube': True,
-                    'video_id': video_id,
-                    'title': title,
-                    'files': [{'filename': dl_file, 'type': ftype}]
-                })
+                print("ERROR: No file found after download!", flush=True)
+            shutil.rmtree(tmp_dir)
 
             if yt_idx < total_yt and delay_after > 0:
                 mins = int(delay_after // 60)
                 secs = int(delay_after % 60)
                 if mins > 0:
-                    print(f"⏳ Pausing for {mins} min {secs} sec...", flush=True)
+                    print(f"Pausing for {mins} min {secs} sec...", flush=True)
                 else:
-                    print(f"⏳ Pausing for {secs} sec...", flush=True)
+                    print(f"Pausing for {secs} sec...", flush=True)
                 time.sleep(delay_after)
 
     with open('download_manifest.json', 'w') as f:
