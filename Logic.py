@@ -211,18 +211,24 @@ def download_and_manifest():
         delay_after = item['delay_after']
 
         out_pattern = f"{title}_{fid}.%(ext)s"
-        print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}")
+        print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}", flush=True)
 
-        before = set(os.listdir('temp_downloads'))
         cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "temp_downloads/{out_pattern}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
         subprocess.run(cmd, shell=True, check=True)
-        after = set(os.listdir('temp_downloads'))
-        new_files = after - before
-        if new_files:
-            dl_file = list(new_files)[0]
+
+        search_pattern = os.path.join('temp_downloads', f"{title}_{fid}.*")
+        matches = glob.glob(search_pattern)
+        if matches:
+            dl_file = os.path.basename(matches[0])
         else:
-            print("ERROR: Could not identify downloaded file!")
-            continue
+            before = set(os.listdir('temp_downloads'))
+            after = set(os.listdir('temp_downloads'))
+            diff = after - before
+            if diff:
+                dl_file = list(diff)[0]
+            else:
+                print("ERROR: Could not identify downloaded file after completion.", flush=True)
+                continue
 
         key = f"{url}|{title}"
         if key not in manifest_entries:
@@ -230,7 +236,7 @@ def download_and_manifest():
         manifest_entries[key]['files'].append({'filename':dl_file,'type':ftype})
 
         if idx < total - 1 and delay_after > 0:
-            print(f"Sleeping for {delay_after} seconds...")
+            print(f"⏳ Pausing for {delay_after} seconds...", flush=True)
             time.sleep(delay_after)
 
     manifest = list(manifest_entries.values())
@@ -247,10 +253,11 @@ def download_and_manifest():
     final_manifest.extend(manifest)
     with open('download_manifest.json','w') as f:
         json.dump(final_manifest, f, indent=2)
+    print("Manifest saved successfully.", flush=True)
 
 def remux_videos():
     if not os.path.exists('download_manifest.json'):
-        print("No manifest, skipping remux.")
+        print("No manifest, skipping remux.", flush=True)
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
@@ -262,7 +269,7 @@ def remux_videos():
                 continue
             fname = file_info['filename']
             os.chdir('temp_downloads')
-            print(f"Remuxing {fname}...")
+            print(f"Remuxing {fname}...", flush=True)
             out = f"fixed_{fname}"
             subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
             os.replace(out, fname)
@@ -270,7 +277,7 @@ def remux_videos():
 
 def create_zips():
     if not os.path.exists('download_manifest.json'):
-        print("No manifest, skipping ZIP.")
+        print("No manifest, skipping ZIP.", flush=True)
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
