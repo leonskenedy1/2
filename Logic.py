@@ -211,6 +211,14 @@ def select_formats(tasks_file):
     with open('download_queue.json', 'w') as f:
         json.dump(queue, f, indent=2)
 
+def get_latest_file(directory):
+    """Return the name of the most recently modified file in the given directory."""
+    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    if not files:
+        return None
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(directory, f)), reverse=True)
+    return files[0]
+
 def download_and_manifest():
     if not os.path.exists('download_queue.json'):
         print("No download queue found.", flush=True)
@@ -235,24 +243,10 @@ def download_and_manifest():
         cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
         subprocess.run(cmd, shell=True, check=True)
 
-        get_filename_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "{out_template}" "{url}"'
-        predicted = subprocess.check_output(get_filename_cmd, shell=True).decode().strip()
-        if os.path.exists(predicted):
-            dl_file = os.path.basename(predicted)
-        else:
-            search_pattern = os.path.join('temp_downloads', glob.escape(f"{title}_{fid}") + '.*')
-            matches = glob.glob(search_pattern)
-            if matches:
-                dl_file = os.path.basename(matches[0])
-            else:
-                before = set(os.listdir('temp_downloads'))
-                after = set(os.listdir('temp_downloads'))
-                diff = after - before
-                if diff:
-                    dl_file = list(diff)[0]
-                else:
-                    print(f"ERROR: Could not locate downloaded file for {title}_{fid}", flush=True)
-                    continue
+        dl_file = get_latest_file('temp_downloads')
+        if not dl_file:
+            print("ERROR: No file found in temp_downloads after download!", flush=True)
+            continue
 
         key = f"{url}|{title}"
         if key not in manifest_entries:
@@ -268,7 +262,10 @@ def download_and_manifest():
         if idx < total - 1 and delay_after > 0:
             mins = int(delay_after // 60)
             secs = int(delay_after % 60)
-            print(f"Pausing for {mins} min {secs} sec...", flush=True)
+            if mins > 0:
+                print(f"⏳ Pausing for {mins} min {secs} sec...", flush=True)
+            else:
+                print(f"⏳ Pausing for {secs} sec...", flush=True)
             time.sleep(delay_after)
 
     manifest = list(manifest_entries.values())
@@ -282,6 +279,9 @@ def remux_videos():
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
+    if not manifest:
+        print("Manifest is empty, skipping remux.", flush=True)
+        return
     for entry in manifest:
         if not entry.get('is_youtube'):
             continue
@@ -302,6 +302,9 @@ def create_zips():
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
+    if not manifest:
+        print("Manifest is empty, skipping ZIP.", flush=True)
+        return
     os.makedirs('final_downloads', exist_ok=True)
     for entry in manifest:
         if not entry.get('is_youtube'):
