@@ -62,17 +62,17 @@ def select_formats(tasks_file):
                             elif val1 == '4k': val1 = '2160'
                         val2 = ''
                         if typ == 'v' and val1.isdigit():
-                            saved_i = i
                             if i < len(opts) and opts[i].isdigit():
-                                val2 = opts[i]
-                                i += 1
-                                while i < len(opts):
-                                    res = try_parse_delay(opts, i)
-                                    if res is None:
-                                        break
-                                    i = res[1]
-                            else:
-                                pass
+                                if i+1 < len(opts) and opts[i+1] in ('h','m','s'):
+                                    pass
+                                else:
+                                    val2 = opts[i]
+                                    i += 1
+                                    while i < len(opts):
+                                        res = try_parse_delay(opts, i)
+                                        if res is None:
+                                            break
+                                        i = res[1]
                     internal_delay = 0.0
                     if val1 == 'all' and i < len(opts) and opts[i].startswith('('):
                         expr = ''
@@ -213,19 +213,21 @@ def download_and_manifest():
         out_pattern = f"{title}_{fid}.%(ext)s"
         print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}")
 
+        before = set(os.listdir('temp_downloads'))
         cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "temp_downloads/{out_pattern}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
         subprocess.run(cmd, shell=True, check=True)
-
-        predicted_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "temp_downloads/{out_pattern}" "{url}"'
-        predicted = subprocess.check_output(predicted_cmd, shell=True).decode().strip()
-        if os.path.exists(predicted):
-            dl_file = os.path.basename(predicted)
-            key = f"{url}|{title}"
-            if key not in manifest_entries:
-                manifest_entries[key] = {'url':url,'is_youtube':True,'video_id':video_id,'title':title,'files':[]}
-            manifest_entries[key]['files'].append({'filename':dl_file,'type':ftype})
+        after = set(os.listdir('temp_downloads'))
+        new_files = after - before
+        if new_files:
+            dl_file = list(new_files)[0]
         else:
-            print(f"WARNING: File {predicted} not found after download!")
+            print("ERROR: Could not identify downloaded file!")
+            continue
+
+        key = f"{url}|{title}"
+        if key not in manifest_entries:
+            manifest_entries[key] = {'url':url,'is_youtube':True,'video_id':video_id,'title':title,'files':[]}
+        manifest_entries[key]['files'].append({'filename':dl_file,'type':ftype})
 
         if idx < total - 1 and delay_after > 0:
             print(f"Sleeping for {delay_after} seconds...")
