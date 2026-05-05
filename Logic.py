@@ -212,63 +212,86 @@ def select_formats(tasks_file):
         json.dump(queue, f, indent=2)
 
 def get_latest_file(directory):
-    """Return the name of the most recently modified file in the given directory."""
     files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
     if not files:
         return None
     files.sort(key=lambda f: os.path.getmtime(os.path.join(directory, f)), reverse=True)
     return files[0]
 
-def download_and_manifest():
-    if not os.path.exists('download_queue.json'):
-        print("No download queue found.", flush=True)
-        return
-    with open('download_queue.json') as f:
-        queue = json.load(f)
-    total = len(queue)
-    manifest_entries = {}
+def download_and_manifest(tasks_file):
     os.makedirs('temp_downloads', exist_ok=True)
+    manifest = []
 
-    for idx, item in enumerate(queue):
-        url = item['url']
-        title = item['title']
-        video_id = item['video_id']
-        fid = item['format_id']
-        ftype = item['type']
-        delay_after = item['delay_after']
+    with open(tasks_file) as f:
+        tasks = [line.strip() for line in f if line.strip()]
 
-        out_template = f"temp_downloads/{title}_{fid}.%(ext)s"
-        print(f"[{idx+1}/{total}] Downloading {ftype} format {fid} for {title}", flush=True)
-
-        cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
-        subprocess.run(cmd, shell=True, check=True)
-
-        dl_file = get_latest_file('temp_downloads')
-        if not dl_file:
-            print("ERROR: No file found in temp_downloads after download!", flush=True)
+    total_tasks = len(tasks)
+    for idx, line in enumerate(tasks):
+        parts = line.split()
+        url = parts[0]
+        if 'youtube.com/watch?v=' in url or 'youtu.be/' in url:
             continue
-
-        key = f"{url}|{title}"
-        if key not in manifest_entries:
-            manifest_entries[key] = {
+        print(f"[{idx+1}/{total_tasks}] Downloading non-YouTube: {url}", flush=True)
+        os.chdir('temp_downloads')
+        subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
+        os.chdir('..')
+        dl_file = get_latest_file('temp_downloads')
+        if dl_file:
+            manifest.append({
                 'url': url,
-                'is_youtube': True,
-                'video_id': video_id,
-                'title': title,
-                'files': []
-            }
-        manifest_entries[key]['files'].append({'filename': dl_file, 'type': ftype})
+                'is_youtube': False,
+                'video_id': '',
+                'title': os.path.splitext(dl_file)[0],
+                'files': [{'filename': dl_file, 'type': 'direct'}]
+            })
 
-        if idx < total - 1 and delay_after > 0:
-            mins = int(delay_after // 60)
-            secs = int(delay_after % 60)
-            if mins > 0:
-                print(f"⏳ Pausing for {mins} min {secs} sec...", flush=True)
+    if os.path.exists('download_queue.json'):
+        with open('download_queue.json') as f:
+            queue = json.load(f)
+        total_yt = len(queue)
+        yt_idx = 0
+        for item in queue:
+            yt_idx += 1
+            url = item['url']
+            title = item['title']
+            video_id = item['video_id']
+            fid = item['format_id']
+            ftype = item['type']
+            delay_after = item['delay_after']
+
+            out_template = f"temp_downloads/{title}_{fid}.%(ext)s"
+            print(f"[{yt_idx}/{total_yt}] Downloading {ftype} format {fid} for {title}", flush=True)
+
+            cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
+            subprocess.run(cmd, shell=True, check=True)
+
+            dl_file = get_latest_file('temp_downloads')
+            if not dl_file:
+                print("ERROR: Could not identify downloaded file!", flush=True)
+                continue
+
+            key = f"{url}|{title}"
+            existing = next((e for e in manifest if e.get('url') == url and e.get('title') == title and e.get('is_youtube')), None)
+            if existing:
+                existing['files'].append({'filename': dl_file, 'type': ftype})
             else:
-                print(f"⏳ Pausing for {secs} sec...", flush=True)
-            time.sleep(delay_after)
+                manifest.append({
+                    'url': url,
+                    'is_youtube': True,
+                    'video_id': video_id,
+                    'title': title,
+                    'files': [{'filename': dl_file, 'type': ftype}]
+                })
 
-    manifest = list(manifest_entries.values())
+            if yt_idx < total_yt and delay_after > 0:
+                mins = int(delay_after // 60)
+                secs = int(delay_after % 60)
+                if mins > 0:
+                    print(f"⏳ Pausing for {mins} min {secs} sec...", flush=True)
+                else:
+                    print(f"⏳ Pausing for {secs} sec...", flush=True)
+                time.sleep(delay_after)
+
     with open('download_manifest.json', 'w') as f:
         json.dump(manifest, f, indent=2)
     print("Manifest saved successfully.", flush=True)
@@ -342,7 +365,7 @@ if __name__ == '__main__':
     if args.select:
         select_formats('tasks.txt')
     elif args.download:
-        download_and_manifest()
+        download_and_manifest('tasks.txt')
     elif args.remux:
         remux_videos()
     elif args.zip:
