@@ -211,13 +211,6 @@ def select_formats(tasks_file):
     with open('download_queue.json', 'w') as f:
         json.dump(queue, f, indent=2)
 
-def get_latest_file(directory):
-    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    if not files:
-        return None
-    files.sort(key=lambda f: os.path.getmtime(os.path.join(directory, f)), reverse=True)
-    return files[0]
-
 def download_and_manifest(tasks_file):
     os.makedirs('temp_downloads', exist_ok=True)
     manifest = []
@@ -235,7 +228,8 @@ def download_and_manifest(tasks_file):
         os.chdir('temp_downloads')
         subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
         os.chdir('..')
-        dl_file = get_latest_file('temp_downloads')
+        dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
+                      key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)))
         if dl_file:
             manifest.append({
                 'url': url,
@@ -260,15 +254,26 @@ def download_and_manifest(tasks_file):
             delay_after = item['delay_after']
 
             out_template = f"temp_downloads/{title}_{fid}.%(ext)s"
+            
+            # پیش‌بینی نام فایل نهایی
+            pred_cmd = f'{YTDLP_BASE} -f {fid} --get-filename -o "{out_template}" "{url}"'
+            predicted_name = subprocess.check_output(pred_cmd, shell=True).decode().strip()
+            
             print(f"[{yt_idx}/{total_yt}] Downloading {ftype} format {fid} for {title}", flush=True)
 
             cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
             subprocess.run(cmd, shell=True, check=True)
 
-            dl_file = get_latest_file('temp_downloads')
-            if not dl_file:
-                print("ERROR: Could not identify downloaded file!", flush=True)
-                continue
+            # استفاده از نام پیش‌بینی‌شده
+            if os.path.exists(predicted_name):
+                dl_file = os.path.basename(predicted_name)
+            else:
+                # fallback: جدیدترین فایل
+                dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
+                              key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)))
+                if not dl_file:
+                    print("ERROR: Could not identify downloaded file!", flush=True)
+                    continue
 
             key = f"{url}|{title}"
             existing = next((e for e in manifest if e.get('url') == url and e.get('title') == title and e.get('is_youtube')), None)
