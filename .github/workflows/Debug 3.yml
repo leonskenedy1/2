@@ -1,0 +1,110 @@
+name: Direct link & Youtube downloader
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Enter "URL" "v/a" "video resolution/audio bitrate" "video FPS (optional)"'
+        required: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Parse input (Is it YouTube?)
+        id: parse
+        run: |
+          INPUT="${{ github.event.inputs.url }}"
+          IFS=' ' read -ra TOKENS <<< "$INPUT"
+          current_url=""
+          current_opts=()
+          > tasks.txt
+          for token in "${TOKENS[@]}"; do
+            if [[ "$token" =~ ^https?:// ]]; then
+              if [ -n "$current_url" ]; then
+                echo "$current_url ${current_opts[*]}" >> tasks.txt
+              fi
+              current_url="$token"
+              current_opts=()
+            else
+              current_opts+=("$token")
+            fi
+          done
+          if [ -n "$current_url" ]; then
+            echo "$current_url ${current_opts[*]}" >> tasks.txt
+          fi
+          if grep -Eq '(youtube\.com/watch\?v=|youtu\.be/)' tasks.txt; then
+            echo "IS_YOUTUBE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_YOUTUBE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install tools (YouTube only)
+        if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        run: |
+          if ! command -v yt-dlp &> /dev/null; then
+            sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+            sudo chmod a+rx /usr/local/bin/yt-dlp
+          fi
+          if ! command -v deno &> /dev/null; then
+            curl -fsSL https://deno.land/install.sh | sh -s -- -y
+            echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Select format (YouTube only)
+        if: steps.parse.outputs.IS_YOUTUBE == 'true'
+        run: python3 Logic.py --select
+
+      - name: Download
+        run: python3 Logic.py --download
+
+      - name: Remux (YouTube video only) [DEBUG]
+        run: |
+          echo "========== MANIFEST CONTENT =========="
+          cat download_manifest.json 2>/dev/null || echo "Manifest file not found!"
+          echo ""
+          echo "========== FILES IN temp_downloads =========="
+          ls -la temp_downloads/ 2>/dev/null || echo "temp_downloads not found!"
+          echo ""
+          echo "========== REMUX LOGIC =========="
+          python3 Logic.py --remux
+
+      - name: Create ZIP & Split file
+        run: python3 Logic.py --zip
+
+      - name: Upload to download folder
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          mkdir -p downloads
+          if [ -d final_downloads ] && [ "$(ls -A final_downloads 2>/dev/null)" ]; then
+            mv final_downloads/* downloads/
+          fi
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git config http.postBuffer 524288000
+
+          if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
+            echo "No files to upload."
+            exit 0
+          fi
+
+          FILES=(downloads/*)
+          total=${#FILES[@]}
+          BATCH=19
+          start=0
+
+          while [ $start -lt $total ]; do
+            end=$(( start + BATCH ))
+            [ $end -gt $total ] && end=$total
+            git add "${FILES[@]:start:end-start}"
+            git commit -m "Add parts $(($start+1))-$end [skip ci]"
+            git push origin "$BRANCH"
+            start=$end
+          done
+
+          echo "All files uploaded to the 'downloads' folder."
