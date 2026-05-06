@@ -34,7 +34,7 @@ def select_formats(tasks_file):
             try:
                 subprocess.run(f'{YTDLP_BASE} --no-progress -j "{url}" > {tempfile}', shell=True, check=True, stderr=subprocess.PIPE)
             except subprocess.CalledProcessError as e:
-                print(f'ERROR: yt-dlp failed for {url}: {e.stderr.decode()}')
+                print(f'⚠️ ERROR: yt-dlp failed for {url}: {e.stderr.decode()}')
                 continue
             with open(tempfile) as jf:
                 data = json.load(jf)
@@ -69,11 +69,6 @@ def select_formats(tasks_file):
                                 if next_is_fps:
                                     val2 = opts[i]
                                     i += 1
-                                    while i < len(opts):
-                                        res = try_parse_delay(opts, i)
-                                        if res is None:
-                                            break
-                                        i = res[1]
                     internal_delay = 0.0
                     if val1 == 'all' and i < len(opts) and opts[i].startswith('('):
                         expr = ''
@@ -227,7 +222,13 @@ def download_and_manifest(tasks_file):
         print(f"[{idx+1}/{len(tasks)}] Downloading non-YouTube: {url}", flush=True)
         tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
         os.chdir(tmp_dir)
-        subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
+        try:
+            subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
+        except subprocess.CalledProcessError:
+            print(f"⚠️ Download failed for {url}", flush=True)
+            os.chdir('../../..')
+            shutil.rmtree(tmp_dir)
+            continue
         os.chdir('../../..')
         downloaded_files = os.listdir(tmp_dir)
         if downloaded_files:
@@ -261,7 +262,17 @@ def download_and_manifest(tasks_file):
             tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
             out_template = os.path.join(tmp_dir, f"{title}_{fid}.%(ext)s")
             cmd = f'stdbuf -oL {YTDLP_BASE} -f {fid} -o "{out_template}" --progress-delta 1 --progress-template "{PROGRESS_TEMPLATE}" "{url}"'
-            subprocess.run(cmd, shell=True, check=True)
+            try:
+                subprocess.run(cmd, shell=True, check=True)
+            except subprocess.CalledProcessError:
+                print(f"⚠️ Download failed for {title} (format {fid})", flush=True)
+                shutil.rmtree(tmp_dir)
+                if yt_idx < total_yt and delay_after > 0:
+                    mins = int(delay_after // 60)
+                    secs = int(delay_after % 60)
+                    print(f"Pausing for {mins} min {secs} sec...", flush=True)
+                    time.sleep(delay_after)
+                continue
 
             downloaded_files = os.listdir(tmp_dir)
             if downloaded_files:
@@ -281,7 +292,7 @@ def download_and_manifest(tasks_file):
                     })
                 print(f"  -> Registered: {dl_file}", flush=True)
             else:
-                print("ERROR: No file found after download!", flush=True)
+                print("⚠️ No file found after download!", flush=True)
             shutil.rmtree(tmp_dir)
 
             if yt_idx < total_yt and delay_after > 0:
@@ -316,8 +327,11 @@ def remux_videos():
             os.chdir('temp_downloads')
             print(f"Remuxing {fname}...", flush=True)
             out = f"fixed_{fname}"
-            subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
-            os.replace(out, fname)
+            try:
+                subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
+                os.replace(out, fname)
+            except subprocess.CalledProcessError:
+                print(f"⚠️ Remux failed for {fname}", flush=True)
             os.chdir('..')
 
 def create_zips():
@@ -334,7 +348,10 @@ def create_zips():
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
             os.chdir('temp_downloads')
-            subprocess.run(f'zip -s 99m -r "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
+            try:
+                subprocess.run(f'zip -s 99m -r "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
+            except subprocess.CalledProcessError:
+                print(f"⚠️ ZIP failed for {fname}", flush=True)
             os.chdir('..')
         else:
             title = entry['title']
@@ -345,14 +362,20 @@ def create_zips():
                 os.makedirs(dest, exist_ok=True)
                 for vf in video_files:
                     shutil.copy(f"temp_downloads/{vf}", dest)
-                subprocess.run(f'zip -s 99m -r "final_downloads/{title}_videos.zip" "{dest}"', shell=True, check=True)
+                try:
+                    subprocess.run(f'zip -s 99m -r "final_downloads/{title}_videos.zip" "{dest}"', shell=True, check=True)
+                except subprocess.CalledProcessError:
+                    print(f"⚠️ ZIP failed for {title}_videos", flush=True)
                 shutil.rmtree(dest)
             if audio_files:
                 dest = f"temp_downloads/{title}_audios"
                 os.makedirs(dest, exist_ok=True)
                 for af in audio_files:
                     shutil.copy(f"temp_downloads/{af}", dest)
-                subprocess.run(f'zip -s 99m -r "final_downloads/{title}_audios.zip" "{dest}"', shell=True, check=True)
+                try:
+                    subprocess.run(f'zip -s 99m -r "final_downloads/{title}_audios.zip" "{dest}"', shell=True, check=True)
+                except subprocess.CalledProcessError:
+                    print(f"⚠️ ZIP failed for {title}_audios", flush=True)
                 shutil.rmtree(dest)
 
 if __name__ == '__main__':
