@@ -85,7 +85,10 @@ jobs:
             exit 0
           fi
 
+          git add downloads/
+          git stash push -m "tmp-downloads"
           git pull --rebase origin "$BRANCH"
+          git stash pop
 
           FILES=(downloads/*)
           total=${#FILES[@]}
