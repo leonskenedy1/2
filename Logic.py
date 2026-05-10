@@ -324,6 +324,10 @@ def remux_videos():
             if file_info.get('type') != 'video':
                 continue
             fname = file_info['filename']
+            src_path = os.path.join('temp_downloads', fname)
+            if not os.path.isfile(src_path):
+                print(f"⚠️ Remux skipped: {fname} is not a file (directory?)", flush=True)
+                continue
             os.chdir('temp_downloads')
             print(f"Remuxing {fname}...", flush=True)
             out = f"fixed_{fname}"
@@ -347,6 +351,10 @@ def create_zips():
     for entry in manifest:
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
+            src = os.path.join('temp_downloads', fname)
+            if not os.path.isfile(src):
+                print(f"⚠️ Skipping ZIP for directory: {fname}", flush=True)
+                continue
             os.chdir('temp_downloads')
             try:
                 subprocess.run(f'zip -s 99m -r "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
@@ -358,20 +366,28 @@ def create_zips():
             video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
             audio_files = [f['filename'] for f in entry['files'] if f['type'] == 'audio']
             if video_files:
-                dest = f"temp_downloads/{title}_videos"
+                dest = os.path.join('temp_downloads', f"{title}_videos")
                 os.makedirs(dest, exist_ok=True)
                 for vf in video_files:
-                    shutil.copy(f"temp_downloads/{vf}", dest)
+                    src_vf = os.path.join('temp_downloads', vf)
+                    if os.path.isfile(src_vf):
+                        shutil.copy(src_vf, dest)
+                    else:
+                        print(f"⚠️ Skipping directory: {vf}", flush=True)
                 try:
                     subprocess.run(f'zip -s 99m -r "final_downloads/{title}_videos.zip" "{dest}"', shell=True, check=True)
                 except subprocess.CalledProcessError:
                     print(f"⚠️ ZIP failed for {title}_videos", flush=True)
                 shutil.rmtree(dest)
             if audio_files:
-                dest = f"temp_downloads/{title}_audios"
+                dest = os.path.join('temp_downloads', f"{title}_audios")
                 os.makedirs(dest, exist_ok=True)
                 for af in audio_files:
-                    shutil.copy(f"temp_downloads/{af}", dest)
+                    src_af = os.path.join('temp_downloads', af)
+                    if os.path.isfile(src_af):
+                        shutil.copy(src_af, dest)
+                    else:
+                        print(f"⚠️ Skipping directory: {af}", flush=True)
                 try:
                     subprocess.run(f'zip -s 99m -r "final_downloads/{title}_audios.zip" "{dest}"', shell=True, check=True)
                 except subprocess.CalledProcessError:
