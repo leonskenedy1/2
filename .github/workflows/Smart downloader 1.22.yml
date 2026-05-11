@@ -72,13 +72,14 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
+          rm -f download_manifest.json download_queue.json selected_formats.json tasks.txt temp_*.json
           mkdir -p downloads
           if [ -d final_downloads ] && [ "$(ls -A final_downloads 2>/dev/null)" ]; then
             mv final_downloads/* downloads/
           fi
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git config http.postBuffer 524288000
+          git config http.postBuffer 2147483648
 
           if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
             echo "No files to upload."
@@ -92,7 +93,7 @@ jobs:
 
           FILES=(downloads/*)
           total=${#FILES[@]}
-          BATCH=10
+          BATCH=5
           start=0
 
           while [ $start -lt $total ]; do
@@ -105,6 +106,8 @@ jobs:
             else
               git commit -m "Add parts $(($start+1))-$end [skip ci]"
               git push origin "$BRANCH"
+              echo "Successfully pushed parts $(($start+1))-$end"
+              rm -f "${FILES[@]:start:end-start}"
             fi
             start=$end
           done
