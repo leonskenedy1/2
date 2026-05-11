@@ -1,4 +1,4 @@
-name: Smart downloader 1.22
+name: Direct link & Youtube downloader
 on:
   workflow_dispatch:
     inputs:
@@ -72,7 +72,6 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
-          set -x
           mkdir -p downloads
           if [ -d final_downloads ] && [ "$(ls -A final_downloads 2>/dev/null)" ]; then
             mv final_downloads/* downloads/
@@ -86,16 +85,6 @@ jobs:
             exit 0
           fi
 
-          git add downloads/
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git stash push -m "temp-stash"
-          git pull --rebase origin "$BRANCH"
-          git stash pop
-
           FILES=(downloads/*)
           total=${#FILES[@]}
           BATCH=19
@@ -104,13 +93,13 @@ jobs:
           while [ $start -lt $total ]; do
             end=$(( start + BATCH ))
             [ $end -gt $total ] && end=$total
-            echo "Processing batch: files $(($start+1)) to $end"
 
             git add "${FILES[@]:start:end-start}"
             if git diff --cached --quiet; then
               echo "No changes to commit for parts $(($start+1))-$end"
             else
               git commit -m "Add parts $(($start+1))-$end [skip ci]"
+              git pull --rebase origin "$BRANCH"
               git push origin "$BRANCH"
             fi
             start=$end
