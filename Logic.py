@@ -207,6 +207,7 @@ def select_formats(tasks_file):
         json.dump(queue, f, indent=2)
 
 def download_and_manifest(tasks_file):
+    shutil.rmtree('temp_downloads', ignore_errors=True)
     os.makedirs('temp_downloads', exist_ok=True)
     manifest = []
 
@@ -360,6 +361,7 @@ def create_zips():
             os.chdir('temp_downloads')
             try:
                 subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
+                os.remove(fname)
             except subprocess.CalledProcessError:
                 print(f"ZIP failed for {fname}", flush=True)
             os.chdir(original_cwd)
@@ -385,6 +387,9 @@ def create_zips():
                 try:
                     cmd = ['zip', '-s', '99m', '-j', f'../final_downloads/{title}_{ftype}.zip'] + file_list
                     subprocess.run(cmd, check=True)
+                    for fname in file_list:
+                        if os.path.exists(fname):
+                            os.remove(fname)
                 except subprocess.CalledProcessError:
                     print(f"ZIP failed for {title}_{ftype}", flush=True)
                 os.chdir(original_cwd)
