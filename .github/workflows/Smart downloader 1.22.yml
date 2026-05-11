@@ -1,4 +1,4 @@
-name: Smart downloader 1.22
+name: Direct link & Youtube downloader
 on:
   workflow_dispatch:
     inputs:
@@ -80,6 +80,8 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 2147483648
+          git config http.lowSpeedLimit 0
+          git config http.lowSpeedTime 999999
 
           if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
             echo "No files to upload."
@@ -93,7 +95,7 @@ jobs:
 
           FILES=(downloads/*)
           total=${#FILES[@]}
-          BATCH=5
+          BATCH=3
           start=0
 
           while [ $start -lt $total ]; do
@@ -105,9 +107,12 @@ jobs:
               echo "No changes to commit for parts $(($start+1))-$end"
             else
               git commit -m "Add parts $(($start+1))-$end [skip ci]"
-              git push origin "$BRANCH"
-              echo "Successfully pushed parts $(($start+1))-$end"
-              rm -f "${FILES[@]:start:end-start}"
+              git push origin "$BRANCH" && echo "Successfully pushed parts $(($start+1))-$end" || {
+                echo "Push failed for parts $(($start+1))-$end, retrying once after 30s..."
+                sleep 30
+                git push origin "$BRANCH" || echo "Push failed again, continuing..."
+              }
+              sleep 3
             fi
             start=$end
           done
