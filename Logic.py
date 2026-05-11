@@ -358,15 +358,16 @@ def create_zips():
             fname = entry['files'][0]['filename']
             src = os.path.join('temp_downloads', fname)
             if not os.path.isfile(src):
-                print(f"⚠️ Skipping ZIP for directory: {fname}", flush=True)
+                print(f"⚠️ Skipping ZIP for non-file: {fname}", flush=True)
                 continue
             os.chdir(work_dir)
             shutil.copy2(src, fname)
             try:
                 subprocess.run(f'zip -s 99m -j "out.zip" "{fname}"', shell=True, check=True)
                 for part in glob.glob('out.*'):
-                    dest = os.path.join('..', '..', 'final_downloads', f"{fname}.{os.path.basename(part).replace('out.', '', 1)}" if part != 'out.zip' else f"{fname}.zip")
-                    shutil.move(part, dest)
+                    suffix = os.path.basename(part).replace('out.', '', 1)
+                    dest_name = f"{fname}.{suffix}" if part != 'out.zip' else f"{fname}.zip"
+                    shutil.move(part, os.path.join('..', '..', 'final_downloads', dest_name))
                 if os.path.exists('out.zip'):
                     shutil.move('out.zip', os.path.join('..', '..', 'final_downloads', f"{fname}.zip"))
             except subprocess.CalledProcessError:
@@ -386,6 +387,7 @@ def create_zips():
                     continue
                 os.chdir(work_dir)
                 valid = True
+                files_copied = []
                 for fname in file_list:
                     src = os.path.join('..', 'temp_downloads', fname)
                     if not os.path.isfile(src):
@@ -393,6 +395,7 @@ def create_zips():
                         valid = False
                         break
                     shutil.copy2(src, fname)
+                    files_copied.append(fname)
                 if not valid:
                     os.chdir('..')
                     shutil.rmtree(work_dir, ignore_errors=True)
@@ -400,11 +403,12 @@ def create_zips():
                     continue
 
                 try:
-                    cmd = ['zip', '-s', '99m', '-j', 'out.zip'] + file_list
+                    cmd = ['zip', '-s', '99m', '-j', 'out.zip'] + files_copied
                     subprocess.run(cmd, check=True)
                     for part in glob.glob('out.*'):
-                        dest = os.path.join('..', 'final_downloads', f"{title}_{ftype}.{os.path.basename(part).replace('out.', '', 1)}" if part != 'out.zip' else f"{title}_{ftype}.zip")
-                        shutil.move(part, dest)
+                        suffix = os.path.basename(part).replace('out.', '', 1)
+                        dest_name = f"{title}_{ftype}.{suffix}" if part != 'out.zip' else f"{title}_{ftype}.zip"
+                        shutil.move(part, os.path.join('..', 'final_downloads', dest_name))
                     if os.path.exists('out.zip'):
                         shutil.move('out.zip', os.path.join('..', 'final_downloads', f"{title}_{ftype}.zip"))
                 except subprocess.CalledProcessError:
