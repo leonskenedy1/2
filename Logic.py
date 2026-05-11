@@ -344,13 +344,26 @@ def create_zips():
     if not manifest:
         print("Manifest is empty, skipping ZIP.", flush=True)
         return
+
+    for pattern in ['tasks.txt', 'selected_formats.json', 'download_queue.json', 'download_manifest.json']:
+        try:
+            os.remove(pattern)
+        except OSError:
+            pass
+    for f in glob.glob('temp_*.json'):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
     os.makedirs('final_downloads', exist_ok=True)
     original_cwd = os.getcwd()
+    temp_downloads_abs = os.path.abspath('temp_downloads')
 
     for entry in manifest:
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
-            src = os.path.join('temp_downloads', fname)
+            src = os.path.join(temp_downloads_abs, fname)
             if not os.path.isfile(src):
                 print(f"Skipping ZIP for non-file: {fname}", flush=True)
                 continue
@@ -360,6 +373,8 @@ def create_zips():
                 os.remove(fname)
             except subprocess.CalledProcessError:
                 print(f"ZIP failed for {fname}", flush=True)
+                if os.path.exists(fname):
+                    os.remove(fname)
             os.chdir(original_cwd)
         else:
             title = entry['title']
@@ -387,6 +402,9 @@ def create_zips():
                             os.remove(fname)
                 except subprocess.CalledProcessError:
                     print(f"ZIP failed for {title}_{ftype}", flush=True)
+                    for fname in file_list:
+                        if os.path.exists(fname):
+                            os.remove(fname)
                 os.chdir(original_cwd)
 
 if __name__ == '__main__':
