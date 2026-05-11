@@ -92,7 +92,7 @@ jobs:
 
           FILES=(downloads/*)
           total=${#FILES[@]}
-          BATCH=19
+          BATCH=10
           start=0
 
           while [ $start -lt $total ]; do
