@@ -221,20 +221,17 @@ def download_and_manifest(tasks_file):
             continue
 
         print(f"[{idx+1}/{len(tasks)}] Downloading non-YouTube: {url}", flush=True)
-        tmp_dir = tempfile.mkdtemp(dir='temp_downloads')
-        os.chdir(tmp_dir)
+        os.chdir('temp_downloads')
         try:
             subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
         except subprocess.CalledProcessError:
             print(f"Download failed for {url}", flush=True)
-            os.chdir('../../..')
-            shutil.rmtree(tmp_dir)
+            os.chdir('..')
             continue
-        os.chdir('../../..')
-        downloaded_files = os.listdir(tmp_dir)
-        if downloaded_files:
-            dl_file = downloaded_files[0]
-            shutil.move(os.path.join(tmp_dir, dl_file), os.path.join('temp_downloads', dl_file))
+        os.chdir('..')
+        dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
+                      key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)), default=None)
+        if dl_file:
             manifest.append({
                 'url': url,
                 'is_youtube': False,
@@ -242,7 +239,6 @@ def download_and_manifest(tasks_file):
                 'title': os.path.splitext(dl_file)[0],
                 'files': [{'filename': dl_file, 'type': 'direct'}]
             })
-        shutil.rmtree(tmp_dir)
 
     if os.path.exists('download_queue.json'):
         with open('download_queue.json') as f:
@@ -361,11 +357,9 @@ def create_zips():
             os.chdir('temp_downloads')
             try:
                 subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
+                os.remove(fname)
             except subprocess.CalledProcessError:
                 print(f"ZIP failed for {fname}", flush=True)
-            finally:
-                if os.path.exists(fname):
-                    os.remove(fname)
             os.chdir(original_cwd)
         else:
             title = entry['title']
@@ -388,12 +382,11 @@ def create_zips():
                 try:
                     cmd = ['zip', '-s', '99m', '-j', f'../final_downloads/{title}_{ftype}.zip'] + file_list
                     subprocess.run(cmd, check=True)
-                except subprocess.CalledProcessError:
-                    print(f"ZIP failed for {title}_{ftype}", flush=True)
-                finally:
                     for fname in file_list:
                         if os.path.exists(fname):
                             os.remove(fname)
+                except subprocess.CalledProcessError:
+                    print(f"ZIP failed for {title}_{ftype}", flush=True)
                 os.chdir(original_cwd)
 
 if __name__ == '__main__':
