@@ -80,22 +80,19 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 2147483648
-          git config http.lowSpeedLimit 0
-          git config http.lowSpeedTime 999999
 
           if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
             echo "No files to upload."
             exit 0
           fi
 
-          git add downloads/
           git stash push -m "temp-before-pull"
           git pull --rebase origin "$BRANCH"
           git stash pop
 
           FILES=(downloads/*)
           total=${#FILES[@]}
-          BATCH=3
+          BATCH=1
           start=0
 
           while [ $start -lt $total ]; do
@@ -107,13 +104,13 @@ jobs:
               echo "No changes to commit for parts $(($start+1))-$end"
             else
               git commit -m "Add parts $(($start+1))-$end [skip ci]"
-              git push origin "$BRANCH" && echo "Successfully pushed parts $(($start+1))-$end" || {
-                echo "Push failed for parts $(($start+1))-$end, retrying once after 30s..."
-                sleep 30
-                git push origin "$BRANCH" || echo "Push failed again, continuing..."
-              }
-              sleep 3
+              if git push origin "$BRANCH"; then
+                echo "Successfully pushed parts $(($start+1))-$end"
+              else
+                echo "Push failed for parts $(($start+1))-$end, continuing..."
+              fi
             fi
+            git reset HEAD "${FILES[@]:start:end-start}" 2>/dev/null
             start=$end
           done
 
