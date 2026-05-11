@@ -361,9 +361,11 @@ def create_zips():
             os.chdir('temp_downloads')
             try:
                 subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
-                os.remove(fname)
             except subprocess.CalledProcessError:
                 print(f"ZIP failed for {fname}", flush=True)
+            finally:
+                if os.path.exists(fname):
+                    os.remove(fname)
             os.chdir(original_cwd)
         else:
             title = entry['title']
@@ -383,15 +385,15 @@ def create_zips():
                 if not valid:
                     os.chdir(original_cwd)
                     continue
-
                 try:
                     cmd = ['zip', '-s', '99m', '-j', f'../final_downloads/{title}_{ftype}.zip'] + file_list
                     subprocess.run(cmd, check=True)
+                except subprocess.CalledProcessError:
+                    print(f"ZIP failed for {title}_{ftype}", flush=True)
+                finally:
                     for fname in file_list:
                         if os.path.exists(fname):
                             os.remove(fname)
-                except subprocess.CalledProcessError:
-                    print(f"ZIP failed for {title}_{ftype}", flush=True)
                 os.chdir(original_cwd)
 
 if __name__ == '__main__':
