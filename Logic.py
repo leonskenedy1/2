@@ -222,23 +222,20 @@ def download_and_manifest(tasks_file):
 
         print(f"[{idx+1}/{len(tasks)}] Downloading non-YouTube: {url}", flush=True)
         os.chdir('temp_downloads')
+        tmp_name = 'downloaded_file.bin'
         try:
-            subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
+            subprocess.run(f'wget --tries=3 -O "{tmp_name}" "{url}"', shell=True, check=True)
+            if os.path.exists(tmp_name):
+                manifest.append({
+                    'url': url,
+                    'is_youtube': False,
+                    'video_id': '',
+                    'title': os.path.splitext(tmp_name)[0],
+                    'files': [{'filename': tmp_name, 'type': 'direct'}]
+                })
         except subprocess.CalledProcessError:
             print(f"Download failed for {url}", flush=True)
-            os.chdir('..')
-            continue
         os.chdir('..')
-        dl_file = max([f for f in os.listdir('temp_downloads') if os.path.isfile(os.path.join('temp_downloads', f))],
-                      key=lambda f: os.path.getmtime(os.path.join('temp_downloads', f)), default=None)
-        if dl_file:
-            manifest.append({
-                'url': url,
-                'is_youtube': False,
-                'video_id': '',
-                'title': os.path.splitext(dl_file)[0],
-                'files': [{'filename': dl_file, 'type': 'direct'}]
-            })
 
     if os.path.exists('download_queue.json'):
         with open('download_queue.json') as f:
