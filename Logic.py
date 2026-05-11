@@ -349,14 +349,17 @@ def create_zips():
         return
     os.makedirs('final_downloads', exist_ok=True)
 
-    work_dir = '/tmp/zip_work'
+    temp_dir_abs = os.path.abspath('temp_downloads')
+    final_dir_abs = os.path.abspath('final_downloads')
+
+    work_dir = os.path.abspath('/tmp/zip_work')
     shutil.rmtree(work_dir, ignore_errors=True)
     os.makedirs(work_dir, exist_ok=True)
 
     for entry in manifest:
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
-            src = os.path.join('temp_downloads', fname)
+            src = os.path.join(temp_dir_abs, fname)
             if not os.path.isfile(src):
                 print(f"⚠️ Skipping ZIP for non-file: {fname}", flush=True)
                 continue
@@ -367,16 +370,15 @@ def create_zips():
                 for part in glob.glob('out.*'):
                     suffix = os.path.basename(part).replace('out.', '', 1)
                     dest_name = f"{fname}.{suffix}" if part != 'out.zip' else f"{fname}.zip"
-                    shutil.move(part, os.path.join('..', '..', 'final_downloads', dest_name))
+                    shutil.move(part, os.path.join(final_dir_abs, dest_name))
                 if os.path.exists('out.zip'):
-                    shutil.move('out.zip', os.path.join('..', '..', 'final_downloads', f"{fname}.zip"))
+                    shutil.move('out.zip', os.path.join(final_dir_abs, f"{fname}.zip"))
             except subprocess.CalledProcessError:
                 print(f"⚠️ ZIP failed for {fname}", flush=True)
             finally:
                 os.chdir(work_dir)
                 for f in os.listdir():
                     os.remove(f)
-            os.chdir(os.path.join('..', '..'))
         else:
             title = entry['title']
             video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
@@ -389,7 +391,7 @@ def create_zips():
                 valid = True
                 files_copied = []
                 for fname in file_list:
-                    src = os.path.join('..', 'temp_downloads', fname)
+                    src = os.path.join(temp_dir_abs, fname)
                     if not os.path.isfile(src):
                         print(f"⚠️ Skipping directory: {fname}", flush=True)
                         valid = False
@@ -397,9 +399,6 @@ def create_zips():
                     shutil.copy2(src, fname)
                     files_copied.append(fname)
                 if not valid:
-                    os.chdir('..')
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                    os.makedirs(work_dir, exist_ok=True)
                     continue
 
                 try:
@@ -408,16 +407,15 @@ def create_zips():
                     for part in glob.glob('out.*'):
                         suffix = os.path.basename(part).replace('out.', '', 1)
                         dest_name = f"{title}_{ftype}.{suffix}" if part != 'out.zip' else f"{title}_{ftype}.zip"
-                        shutil.move(part, os.path.join('..', 'final_downloads', dest_name))
+                        shutil.move(part, os.path.join(final_dir_abs, dest_name))
                     if os.path.exists('out.zip'):
-                        shutil.move('out.zip', os.path.join('..', 'final_downloads', f"{title}_{ftype}.zip"))
+                        shutil.move('out.zip', os.path.join(final_dir_abs, f"{title}_{ftype}.zip"))
                 except subprocess.CalledProcessError:
                     print(f"⚠️ ZIP failed for {title}_{ftype}", flush=True)
                 finally:
                     os.chdir(work_dir)
                     for f in os.listdir():
                         os.remove(f)
-                os.chdir('..')
 
     shutil.rmtree(work_dir, ignore_errors=True)
 
