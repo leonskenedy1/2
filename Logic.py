@@ -348,6 +348,11 @@ def create_zips():
         print("Manifest is empty, skipping ZIP.", flush=True)
         return
     os.makedirs('final_downloads', exist_ok=True)
+
+    work_dir = '/tmp/zip_work'
+    shutil.rmtree(work_dir, ignore_errors=True)
+    os.makedirs(work_dir, exist_ok=True)
+
     for entry in manifest:
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
@@ -355,34 +360,62 @@ def create_zips():
             if not os.path.isfile(src):
                 print(f"⚠️ Skipping ZIP for directory: {fname}", flush=True)
                 continue
-            os.chdir('temp_downloads')
+            os.chdir(work_dir)
+            shutil.copy2(src, fname)
             try:
-                subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
+                subprocess.run(f'zip -s 99m -j "out.zip" "{fname}"', shell=True, check=True)
+                for part in glob.glob('out.*'):
+                    dest = os.path.join('..', '..', 'final_downloads', f"{fname}.{os.path.basename(part).replace('out.', '', 1)}" if part != 'out.zip' else f"{fname}.zip")
+                    shutil.move(part, dest)
+                if os.path.exists('out.zip'):
+                    shutil.move('out.zip', os.path.join('..', '..', 'final_downloads', f"{fname}.zip"))
             except subprocess.CalledProcessError:
                 print(f"⚠️ ZIP failed for {fname}", flush=True)
-            os.chdir('..')
+            finally:
+                os.chdir(work_dir)
+                for f in os.listdir():
+                    os.remove(f)
+            os.chdir(os.path.join('..', '..'))
         else:
             title = entry['title']
             video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
             audio_files = [f['filename'] for f in entry['files'] if f['type'] == 'audio']
-            if video_files:
-                os.chdir('temp_downloads')
-                zip_name = f"../final_downloads/{title}_videos.zip"
+
+            for ftype, file_list in (('videos', video_files), ('audios', audio_files)):
+                if not file_list:
+                    continue
+                os.chdir(work_dir)
+                valid = True
+                for fname in file_list:
+                    src = os.path.join('..', 'temp_downloads', fname)
+                    if not os.path.isfile(src):
+                        print(f"⚠️ Skipping directory: {fname}", flush=True)
+                        valid = False
+                        break
+                    shutil.copy2(src, fname)
+                if not valid:
+                    os.chdir('..')
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    os.makedirs(work_dir, exist_ok=True)
+                    continue
+
                 try:
-                    cmd = ['zip', '-s', '99m', '-j', zip_name] + video_files
+                    cmd = ['zip', '-s', '99m', '-j', 'out.zip'] + file_list
                     subprocess.run(cmd, check=True)
+                    for part in glob.glob('out.*'):
+                        dest = os.path.join('..', 'final_downloads', f"{title}_{ftype}.{os.path.basename(part).replace('out.', '', 1)}" if part != 'out.zip' else f"{title}_{ftype}.zip")
+                        shutil.move(part, dest)
+                    if os.path.exists('out.zip'):
+                        shutil.move('out.zip', os.path.join('..', 'final_downloads', f"{title}_{ftype}.zip"))
                 except subprocess.CalledProcessError:
-                    print(f"⚠️ ZIP failed for {title}_videos", flush=True)
+                    print(f"⚠️ ZIP failed for {title}_{ftype}", flush=True)
+                finally:
+                    os.chdir(work_dir)
+                    for f in os.listdir():
+                        os.remove(f)
                 os.chdir('..')
-            if audio_files:
-                os.chdir('temp_downloads')
-                zip_name = f"../final_downloads/{title}_audios.zip"
-                try:
-                    cmd = ['zip', '-s', '99m', '-j', zip_name] + audio_files
-                    subprocess.run(cmd, check=True)
-                except subprocess.CalledProcessError:
-                    print(f"⚠️ ZIP failed for {title}_audios", flush=True)
-                os.chdir('..')
+
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
