@@ -34,7 +34,7 @@ def select_formats(tasks_file):
             try:
                 subprocess.run(f'{YTDLP_BASE} --no-progress -j "{url}" > {tempfile}', shell=True, check=True, stderr=subprocess.PIPE)
             except subprocess.CalledProcessError as e:
-                print(f'⚠️ ERROR: yt-dlp failed for {url}: {e.stderr.decode()}')
+                print(f'ERROR: yt-dlp failed for {url}: {e.stderr.decode()}')
                 continue
             with open(tempfile) as jf:
                 data = json.load(jf)
@@ -225,7 +225,7 @@ def download_and_manifest(tasks_file):
         try:
             subprocess.run(f'wget --progress=bar:force --content-disposition "{url}"', shell=True, check=True)
         except subprocess.CalledProcessError:
-            print(f"⚠️ Download failed for {url}", flush=True)
+            print(f"Download failed for {url}", flush=True)
             os.chdir('../../..')
             shutil.rmtree(tmp_dir)
             continue
@@ -265,7 +265,7 @@ def download_and_manifest(tasks_file):
             try:
                 subprocess.run(cmd, shell=True, check=True)
             except subprocess.CalledProcessError:
-                print(f"⚠️ Download failed for {title} (format {fid})", flush=True)
+                print(f"Download failed for {title} (format {fid})", flush=True)
                 shutil.rmtree(tmp_dir)
                 if yt_idx < total_yt and delay_after > 0:
                     mins = int(delay_after // 60)
@@ -292,7 +292,7 @@ def download_and_manifest(tasks_file):
                     })
                 print(f"  -> Registered: {dl_file}", flush=True)
             else:
-                print("⚠️ No file found after download!", flush=True)
+                print("No file found after download!", flush=True)
             shutil.rmtree(tmp_dir)
 
             if yt_idx < total_yt and delay_after > 0:
@@ -326,7 +326,7 @@ def remux_videos():
             fname = file_info['filename']
             src_path = os.path.join('temp_downloads', fname)
             if not os.path.isfile(src_path):
-                print(f"⚠️ Remux skipped: {fname} is not a file (directory?)", flush=True)
+                print(f"Remux skipped: {fname} is not a file (directory?)", flush=True)
                 continue
             os.chdir('temp_downloads')
             print(f"Remuxing {fname}...", flush=True)
@@ -335,7 +335,7 @@ def remux_videos():
                 subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
                 os.replace(out, fname)
             except subprocess.CalledProcessError:
-                print(f"⚠️ Remux failed for {fname}", flush=True)
+                print(f"Remux failed for {fname}", flush=True)
             os.chdir('..')
 
 def create_zips():
@@ -348,37 +348,21 @@ def create_zips():
         print("Manifest is empty, skipping ZIP.", flush=True)
         return
     os.makedirs('final_downloads', exist_ok=True)
-
-    temp_dir_abs = os.path.abspath('temp_downloads')
-    final_dir_abs = os.path.abspath('final_downloads')
-
-    work_dir = os.path.abspath('/tmp/zip_work')
-    shutil.rmtree(work_dir, ignore_errors=True)
-    os.makedirs(work_dir, exist_ok=True)
+    original_cwd = os.getcwd()
 
     for entry in manifest:
         if not entry.get('is_youtube'):
             fname = entry['files'][0]['filename']
-            src = os.path.join(temp_dir_abs, fname)
+            src = os.path.join('temp_downloads', fname)
             if not os.path.isfile(src):
-                print(f"⚠️ Skipping ZIP for non-file: {fname}", flush=True)
+                print(f"Skipping ZIP for non-file: {fname}", flush=True)
                 continue
-            os.chdir(work_dir)
-            shutil.copy2(src, fname)
+            os.chdir('temp_downloads')
             try:
-                subprocess.run(f'zip -s 99m -j "out.zip" "{fname}"', shell=True, check=True)
-                for part in glob.glob('out.*'):
-                    suffix = os.path.basename(part).replace('out.', '', 1)
-                    dest_name = f"{fname}.{suffix}" if part != 'out.zip' else f"{fname}.zip"
-                    shutil.move(part, os.path.join(final_dir_abs, dest_name))
-                if os.path.exists('out.zip'):
-                    shutil.move('out.zip', os.path.join(final_dir_abs, f"{fname}.zip"))
+                subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
             except subprocess.CalledProcessError:
-                print(f"⚠️ ZIP failed for {fname}", flush=True)
-            finally:
-                os.chdir(work_dir)
-                for f in os.listdir():
-                    os.remove(f)
+                print(f"ZIP failed for {fname}", flush=True)
+            os.chdir(original_cwd)
         else:
             title = entry['title']
             video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
@@ -387,37 +371,23 @@ def create_zips():
             for ftype, file_list in (('videos', video_files), ('audios', audio_files)):
                 if not file_list:
                     continue
-                os.chdir(work_dir)
+                os.chdir('temp_downloads')
                 valid = True
-                files_copied = []
                 for fname in file_list:
-                    src = os.path.join(temp_dir_abs, fname)
-                    if not os.path.isfile(src):
-                        print(f"⚠️ Skipping directory: {fname}", flush=True)
+                    if not os.path.isfile(fname):
+                        print(f"Skipping directory: {fname}", flush=True)
                         valid = False
                         break
-                    shutil.copy2(src, fname)
-                    files_copied.append(fname)
                 if not valid:
+                    os.chdir(original_cwd)
                     continue
 
                 try:
-                    cmd = ['zip', '-s', '99m', '-j', 'out.zip'] + files_copied
+                    cmd = ['zip', '-s', '99m', '-j', f'../final_downloads/{title}_{ftype}.zip'] + file_list
                     subprocess.run(cmd, check=True)
-                    for part in glob.glob('out.*'):
-                        suffix = os.path.basename(part).replace('out.', '', 1)
-                        dest_name = f"{title}_{ftype}.{suffix}" if part != 'out.zip' else f"{title}_{ftype}.zip"
-                        shutil.move(part, os.path.join(final_dir_abs, dest_name))
-                    if os.path.exists('out.zip'):
-                        shutil.move('out.zip', os.path.join(final_dir_abs, f"{title}_{ftype}.zip"))
                 except subprocess.CalledProcessError:
-                    print(f"⚠️ ZIP failed for {title}_{ftype}", flush=True)
-                finally:
-                    os.chdir(work_dir)
-                    for f in os.listdir():
-                        os.remove(f)
-
-    shutil.rmtree(work_dir, ignore_errors=True)
+                    print(f"ZIP failed for {title}_{ftype}", flush=True)
+                os.chdir(original_cwd)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
