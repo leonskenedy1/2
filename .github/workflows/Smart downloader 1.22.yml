@@ -86,9 +86,7 @@ jobs:
             exit 0
           fi
 
-          git stash push -m "temp-before-pull"
-          git pull --rebase origin "$BRANCH"
-          git stash pop
+          git pull --rebase --autostash origin "$BRANCH"
 
           FILES=(downloads/*)
           total=${#FILES[@]}
