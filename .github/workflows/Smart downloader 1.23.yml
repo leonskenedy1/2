@@ -53,7 +53,7 @@ jobs:
             curl -fsSL https://deno.land/install.sh | sh -s -- -y
             echo "$HOME/.deno/bin" >> $GITHUB_PATH
           fi
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg inotify-tools
 
       - name: Select format (YouTube only)
         if: steps.parse.outputs.IS_YOUTUBE == 'true'
@@ -114,9 +114,9 @@ jobs:
               fi
             fi
 
-            while [ $(jobs -r -p | wc -l) -gt 0 ]; do
-              sleep 1
-              for part in final_downloads/*; do
+            while [ $(jobs -r -p | wc -l) -gt 0 ] || [ -n "$(ls final_downloads)" ]; do
+              inotifywait -q -e close_write --format '%f' final_downloads | while read -r new_file; do
+                part="final_downloads/$new_file"
                 [ -f "$part" ] || continue
                 base=$(basename "$part")
                 mv "$part" "downloads/$base"
@@ -145,6 +145,7 @@ jobs:
                 fi
               done
             done
+            wait
           done
 
           echo "All files uploaded to the 'downloads' folder."
