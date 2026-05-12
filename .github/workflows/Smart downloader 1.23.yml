@@ -132,38 +132,53 @@ jobs:
               fi
             fi
 
-            while [ $(jobs -r -p | wc -l) -gt 0 ] || [ -n "$(ls final_downloads)" ]; do
-              inotifywait -q -e close_write --format '%f' final_downloads | while read -r new_file; do
-                part="final_downloads/$new_file"
-                [ -f "$part" ] || continue
-                base=$(basename "$part")
-                mv "$part" "downloads/$base"
-                git add "downloads/$base"
-                if git diff --cached --quiet; then
-                  echo "No changes for $base"
-                else
-                  git pull --rebase --autostash origin "$BRANCH"
-                  git commit -m "Add part $base [skip ci]"
-                  pushed=false
-                  for attempt in $(seq 1 20); do
-                    if git push origin "$BRANCH"; then
-                      echo "Successfully pushed $base"
-                      pushed=true
-                      break
-                    else
-                      echo "Push attempt $attempt/20 failed for $base, retrying..."
-                      git pull --rebase --autostash origin "$BRANCH"
-                      sleep 2
-                    fi
-                  done
-                  if [ "$pushed" = false ]; then
-                    echo "ERROR: Failed to push $base after 20 attempts."
+            process_part() {
+              local part="$1"
+              local base
+              base=$(basename "$part")
+              mv "$part" "downloads/$base"
+              git add "downloads/$base"
+              if git diff --cached --quiet; then
+                echo "No changes for $base"
+              else
+                git pull --rebase --autostash origin "$BRANCH"
+                git commit -m "Add part $base [skip ci]"
+                pushed=false
+                for attempt in $(seq 1 20); do
+                  if git push origin "$BRANCH"; then
+                    echo "Successfully pushed $base"
+                    pushed=true
+                    break
+                  else
+                    echo "Push attempt $attempt/20 failed for $base, retrying..."
+                    git pull --rebase --autostash origin "$BRANCH"
+                    sleep 2
                   fi
-                  rm -f "downloads/$base"
+                done
+                if [ "$pushed" = false ]; then
+                  echo "ERROR: Failed to push $base after 20 attempts."
                 fi
-              done
+                rm -f "downloads/$base"
+              fi
+            }
+
+            while [ $(jobs -r -p | wc -l) -gt 0 ] || [ -n "$(ls final_downloads)" ]; do
+              if new_file=$(inotifywait -q -e close_write -e moved_to --timeout 10 --format '%f' final_downloads 2>/dev/null); then
+                part="final_downloads/$new_file"
+                [ -f "$part" ] && process_part "$part"
+              else
+                for part in final_downloads/*; do
+                  [ -f "$part" ] || continue
+                  process_part "$part"
+                done
+              fi
             done
             wait
+
+            for part in final_downloads/*; do
+              [ -f "$part" ] || continue
+              process_part "$part"
+            done
           done
 
           echo "All files uploaded to the 'downloads' folder."
