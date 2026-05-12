@@ -65,66 +65,86 @@ jobs:
       - name: Remux (YouTube video only)
         run: python3 Logic.py --remux
 
-      - name: Create ZIP & Split file
-        run: python3 Logic.py --zip
-
-      - name: Upload to download folder
+      - name: Create & Upload to download folder
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
           rm -f download_manifest.json download_queue.json selected_formats.json tasks.txt temp_*.json
-          mkdir -p downloads
-          if [ -d final_downloads ] && [ "$(ls -A final_downloads 2>/dev/null)" ]; then
-            mv final_downloads/* downloads/
+          mkdir -p downloads final_downloads temp_downloads
+
+          if [ ! -f download_manifest.json ]; then
+            echo "No manifest found."
+            exit 0
           fi
+
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git config http.postBuffer 2147483648
 
-          if [ ! -d downloads ] || [ -z "$(ls -A downloads 2>/dev/null)" ]; then
-            echo "No files to upload."
-            exit 0
-          fi
-
-          git add downloads/
-          git stash push -m "temp-before-pull"
-          git pull --rebase origin "$BRANCH"
-          git stash pop
-
-          FILES=(downloads/*)
-          total=${#FILES[@]}
-          BATCH=1
-          start=0
-
-          while [ $start -lt $total ]; do
-            end=$(( start + BATCH ))
-            [ $end -gt $total ] && end=$total
-
-            git add "${FILES[@]:start:end-start}"
-            if git diff --cached --quiet; then
-              echo "No changes to commit for parts $(($start+1))-$end"
+          jq -c '.[]' download_manifest.json | while read -r entry; do
+            is_yt=$(echo "$entry" | jq -r '.is_youtube')
+            if [ "$is_yt" = "false" ]; then
+              fname=$(echo "$entry" | jq -r '.files[0].filename')
+              echo "Processing: $fname"
+              (
+                cd temp_downloads
+                nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${fname}.zip" "$fname"
+                rm -f "$fname"
+              ) &
             else
-              git pull --rebase origin "$BRANCH"
-              git commit -m "Add parts $(($start+1))-$end [skip ci]"
-              
-              pushed=false
-              for attempt in $(seq 1 20); do
-                if git push origin "$BRANCH"; then
-                  echo "Successfully pushed parts $(($start+1))-$end"
-                  pushed=true
-                  break
-                else
-                  echo "Push attempt $attempt/20 failed, pulling and retrying in 2s..."
-                  git pull --rebase origin "$BRANCH"
-                  sleep 2
-                fi
-              done
-              if [ "$pushed" = false ]; then
-                echo "ERROR: Failed to push parts $(($start+1))-$end after 20 attempts, skipping."
+              title=$(echo "$entry" | jq -r '.title')
+              video_files=$(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename' | tr '\n' ' ')
+              audio_files=$(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename' | tr '\n' ' ')
+
+              if [ -n "$video_files" ]; then
+                echo "Processing videos of $title"
+                (
+                  cd temp_downloads
+                  nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" $video_files
+                  rm -f $video_files
+                ) &
+              fi
+              if [ -n "$audio_files" ]; then
+                echo "Processing audios of $title"
+                (
+                  cd temp_downloads
+                  nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" $audio_files
+                  rm -f $audio_files
+                ) &
               fi
             fi
-            git reset HEAD "${FILES[@]:start:end-start}" 2>/dev/null
-            start=$end
+
+            while [ $(jobs -r -p | wc -l) -gt 0 ]; do
+              sleep 1
+              for part in final_downloads/*; do
+                [ -f "$part" ] || continue
+                base=$(basename "$part")
+                mv "$part" "downloads/$base"
+                git add "downloads/$base"
+                if git diff --cached --quiet; then
+                  echo "No changes for $base"
+                else
+                  git pull --rebase origin "$BRANCH"
+                  git commit -m "Add part $base [skip ci]"
+                  pushed=false
+                  for attempt in $(seq 1 20); do
+                    if git push origin "$BRANCH"; then
+                      echo "Successfully pushed $base"
+                      pushed=true
+                      break
+                    else
+                      echo "Push attempt $attempt/20 failed for $base, retrying..."
+                      git pull --rebase origin "$BRANCH"
+                      sleep 2
+                    fi
+                  done
+                  if [ "$pushed" = false ]; then
+                    echo "ERROR: Failed to push $base after 20 attempts."
+                  fi
+                  rm -f "downloads/$base"
+                fi
+              done
+            done
           done
 
           echo "All files uploaded to the 'downloads' folder."
