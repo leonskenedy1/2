@@ -74,6 +74,8 @@ jobs:
           fi
 
           rm -f download_queue.json selected_formats.json tasks.txt temp_*.json
+          git gc --prune=now --quiet
+
           mkdir -p downloads final_downloads temp_downloads
 
           if [ ! -f download_manifest.json ]; then
@@ -92,8 +94,12 @@ jobs:
               echo "Processing: $fname"
               (
                 cd temp_downloads
-                nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${fname}.zip" "$fname"
-                rm -f "$fname"
+                if cat "$fname" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${fname}.zip" -; then
+                  rm -f "$fname"
+                else
+                  echo "ZIP failed for $fname"
+                  rm -f "$fname"
+                fi
               ) &
             else
               title=$(echo "$entry" | jq -r '.title')
@@ -104,16 +110,24 @@ jobs:
                 echo "Processing videos of $title"
                 (
                   cd temp_downloads
-                  nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" $video_files
-                  rm -f $video_files
+                  if cat $video_files | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" -; then
+                    rm -f $video_files
+                  else
+                    echo "ZIP failed for ${title}_videos"
+                    rm -f $video_files
+                  fi
                 ) &
               fi
               if [ -n "$audio_files" ]; then
                 echo "Processing audios of $title"
                 (
                   cd temp_downloads
-                  nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" $audio_files
-                  rm -f $audio_files
+                  if cat $audio_files | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" -; then
+                    rm -f $audio_files
+                  else
+                    echo "ZIP failed for ${title}_audios"
+                    rm -f $audio_files
+                  fi
                 ) &
               fi
             fi
