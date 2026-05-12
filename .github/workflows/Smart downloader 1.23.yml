@@ -103,30 +103,30 @@ jobs:
               ) &
             else
               title=$(echo "$entry" | jq -r '.title')
-              video_files=$(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename' | tr '\n' ' ')
-              audio_files=$(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename' | tr '\n' ' ')
+              mapfile -t video_array < <(echo "$entry" | jq -r '.files[] | select(.type == "video") | .filename')
+              mapfile -t audio_array < <(echo "$entry" | jq -r '.files[] | select(.type == "audio") | .filename')
 
-              if [ -n "$video_files" ]; then
+              if [ ${#video_array[@]} -gt 0 ]; then
                 echo "Processing videos of $title"
                 (
                   cd temp_downloads
-                  if cat $video_files | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" -; then
-                    rm -f $video_files
+                  if cat "${video_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" -; then
+                    rm -f "${video_array[@]}"
                   else
                     echo "ZIP failed for ${title}_videos"
-                    rm -f $video_files
+                    rm -f "${video_array[@]}"
                   fi
                 ) &
               fi
-              if [ -n "$audio_files" ]; then
+              if [ ${#audio_array[@]} -gt 0 ]; then
                 echo "Processing audios of $title"
                 (
                   cd temp_downloads
-                  if cat $audio_files | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" -; then
-                    rm -f $audio_files
+                  if cat "${audio_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" -; then
+                    rm -f "${audio_array[@]}"
                   else
                     echo "ZIP failed for ${title}_audios"
-                    rm -f $audio_files
+                    rm -f "${audio_array[@]}"
                   fi
                 ) &
               fi
