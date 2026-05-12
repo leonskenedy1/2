@@ -94,12 +94,8 @@ jobs:
               echo "Processing: $fname"
               (
                 cd temp_downloads
-                if cat "$fname" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${fname}.zip" -; then
-                  rm -f "$fname"
-                else
-                  echo "ZIP failed for $fname"
-                  rm -f "$fname"
-                fi
+                tar cf - "$fname" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${fname}.zip" -
+                rm -f "$fname"
               ) &
             else
               title=$(echo "$entry" | jq -r '.title')
@@ -110,24 +106,16 @@ jobs:
                 echo "Processing videos of $title"
                 (
                   cd temp_downloads
-                  if cat "${video_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" -; then
-                    rm -f "${video_array[@]}"
-                  else
-                    echo "ZIP failed for ${title}_videos"
-                    rm -f "${video_array[@]}"
-                  fi
+                  tar cf - "${video_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_videos.zip" -
+                  rm -f "${video_array[@]}"
                 ) &
               fi
               if [ ${#audio_array[@]} -gt 0 ]; then
                 echo "Processing audios of $title"
                 (
                   cd temp_downloads
-                  if cat "${audio_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" -; then
-                    rm -f "${audio_array[@]}"
-                  else
-                    echo "ZIP failed for ${title}_audios"
-                    rm -f "${audio_array[@]}"
-                  fi
+                  tar cf - "${audio_array[@]}" | nice -n 19 ionice -c 2 -n 7 zip -8 -s 99m -j "../final_downloads/${title}_audios.zip" -
+                  rm -f "${audio_array[@]}"
                 ) &
               fi
             fi
