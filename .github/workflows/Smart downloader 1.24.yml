@@ -1,4 +1,4 @@
-name: Direct link & Youtube downloader
+name: Smart downloader 1.24
 on:
   workflow_dispatch:
     inputs:
