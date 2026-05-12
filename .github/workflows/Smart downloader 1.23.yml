@@ -124,7 +124,7 @@ jobs:
                 if git diff --cached --quiet; then
                   echo "No changes for $base"
                 else
-                  git pull --rebase origin "$BRANCH"
+                  git pull --rebase --autostash origin "$BRANCH"
                   git commit -m "Add part $base [skip ci]"
                   pushed=false
                   for attempt in $(seq 1 20); do
@@ -134,7 +134,7 @@ jobs:
                       break
                     else
                       echo "Push attempt $attempt/20 failed for $base, retrying..."
-                      git pull --rebase origin "$BRANCH"
+                      git pull --rebase --autostash origin "$BRANCH"
                       sleep 2
                     fi
                   done
