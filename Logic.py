@@ -224,7 +224,7 @@ def download_and_manifest(tasks_file):
         os.chdir('temp_downloads')
         tmp_name = 'downloaded_file.bin'
         try:
-            subprocess.run(f'wget --tries=3 -O "{tmp_name}" "{url}"', shell=True, check=True)
+            subprocess.run(f'wget --tries=3 --progress=bar:force:noscroll -O "{tmp_name}" "{url}"', shell=True, check=True)
             if os.path.exists(tmp_name):
                 manifest.append({
                     'url': url,
