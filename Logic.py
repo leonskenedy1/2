@@ -365,9 +365,10 @@ def create_zips():
                 print(f"Skipping ZIP for non-file: {fname}", flush=True)
                 continue
             os.chdir('temp_downloads')
+            zip_name = f"../final_downloads/{fname}.zip"
             try:
-                subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
                 os.remove(fname)
+                subprocess.run(f'zip -s 99m -j "{zip_name}" "{fname}"', shell=True, check=True)
             except subprocess.CalledProcessError:
                 print(f"ZIP failed for {fname}", flush=True)
                 if os.path.exists(fname):
@@ -392,11 +393,10 @@ def create_zips():
                     os.chdir(original_cwd)
                     continue
                 try:
+                    for fname in file_list:
+                        os.remove(fname)
                     cmd = ['zip', '-s', '99m', '-j', f'../final_downloads/{title}_{ftype}.zip'] + file_list
                     subprocess.run(cmd, check=True)
-                    for fname in file_list:
-                        if os.path.exists(fname):
-                            os.remove(fname)
                 except subprocess.CalledProcessError:
                     print(f"ZIP failed for {title}_{ftype}", flush=True)
                     for fname in file_list:
