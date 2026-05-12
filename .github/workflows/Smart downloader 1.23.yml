@@ -69,7 +69,7 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
-          rm -f download_manifest.json download_queue.json selected_formats.json tasks.txt temp_*.json
+          rm -f download_queue.json selected_formats.json tasks.txt temp_*.json
           mkdir -p downloads final_downloads temp_downloads
 
           if [ ! -f download_manifest.json ]; then
