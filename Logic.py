@@ -304,13 +304,29 @@ def download_and_manifest(tasks_file):
 
 def remux_videos():
     if not os.path.exists('download_manifest.json'):
-        print("No manifest, skipping remux.", flush=True)
+        print("No manifest file, skipping remux.", flush=True)
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
     if not manifest:
         print("Manifest is empty, skipping remux.", flush=True)
         return
+
+    has_video = False
+    for entry in manifest:
+        if not entry.get('is_youtube'):
+            continue
+        for file_info in entry.get('files', []):
+            if file_info.get('type') == 'video':
+                has_video = True
+                break
+        if has_video:
+            break
+
+    if not has_video:
+        print("No video files found in manifest, skipping remux.", flush=True)
+        return
+
     for entry in manifest:
         if not entry.get('is_youtube'):
             continue
