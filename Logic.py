@@ -312,23 +312,20 @@ def remux_videos():
         print("Manifest is empty, skipping remux.", flush=True)
         return
 
+    video_count = 0
     for entry in manifest:
+        if not entry.get('is_youtube'):
+            continue
         new_files = []
         for file_info in entry.get('files', []):
             fname = file_info['filename']
             src_path = os.path.join('temp_downloads', fname)
-            size = os.path.getsize(src_path) if os.path.isfile(src_path) else 0
-
-            is_video = False
-            if entry.get('is_youtube'):
-                if file_info.get('type') == 'video':
-                    is_video = True
-            else:
-                if file_info.get('type') == 'direct':
-                    probe = subprocess.run(['ffprobe', '-v', 'quiet', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', src_path],
-                                           capture_output=True, text=True)
-                    if probe.returncode == 0 and 'video' in probe.stdout:
-                        is_video = True
+            if not os.path.isfile(src_path):
+                print(f"Remux: file not found {src_path}, keeping entry.", flush=True)
+                new_files.append(file_info)
+                continue
+            size = os.path.getsize(src_path)
+            is_video = (file_info.get('type') == 'video')
 
             if is_video and size > 7 * 1024 * 1024 * 1024:
                 print(f"Splitting large video: {fname} ({size/1e9:.2f} GB)", flush=True)
@@ -337,7 +334,7 @@ def remux_videos():
                     dur_str = subprocess.check_output(dur_cmd, shell=True).decode().strip()
                     duration = float(dur_str)
                 except:
-                    print(f"Cannot get duration of {fname}, skipping split.")
+                    print(f"Cannot get duration of {fname}, skipping split.", flush=True)
                     new_files.append(file_info)
                     continue
                 half = duration / 2.0
@@ -349,13 +346,15 @@ def remux_videos():
                 try:
                     subprocess.run(split_cmd, shell=True, check=True)
                     os.remove(src_path)
-                    new_files.append({'filename': part1, 'type': 'video' if entry.get('is_youtube') else 'direct'})
-                    new_files.append({'filename': part2, 'type': 'video' if entry.get('is_youtube') else 'direct'})
+                    new_files.append({'filename': part1, 'type': 'video'})
+                    new_files.append({'filename': part2, 'type': 'video'})
+                    video_count += 2
+                    print(f"Split successful: {part1} + {part2}", flush=True)
                 except subprocess.CalledProcessError:
-                    print(f"Split failed for {fname}, keeping original.")
+                    print(f"Split failed for {fname}, keeping original.", flush=True)
                     new_files.append(file_info)
             else:
-                if is_video and os.path.isfile(src_path):
+                if is_video:
                     os.chdir('temp_downloads')
                     print(f"Remuxing {fname}...", flush=True)
                     out = f"fixed_{fname}"
@@ -366,7 +365,14 @@ def remux_videos():
                         print(f"Remux failed for {fname}", flush=True)
                     os.chdir('..')
                 new_files.append(file_info)
+                if is_video:
+                    video_count += 1
         entry['files'] = new_files
+
+    if video_count == 0:
+        print("No video files found in manifest, nothing to remux.", flush=True)
+    else:
+        print(f"Remux completed for {video_count} video files.", flush=True)
 
     with open('download_manifest.json', 'w') as f:
         json.dump(manifest, f, indent=2)
