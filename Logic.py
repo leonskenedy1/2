@@ -224,7 +224,7 @@ def download_and_manifest(tasks_file):
         os.chdir('temp_downloads')
         tmp_name = 'downloaded_file.bin'
         try:
-            subprocess.run(f'wget --tries=3 --progress=bar:force:noscroll -O "{tmp_name}" "{url}"', shell=True, check=True)
+            subprocess.run(f'wget --tries=3 -O "{tmp_name}" "{url}"', shell=True, check=True)
             if os.path.exists(tmp_name):
                 manifest.append({
                     'url': url,
@@ -304,7 +304,7 @@ def download_and_manifest(tasks_file):
 
 def remux_videos():
     if not os.path.exists('download_manifest.json'):
-        print("No manifest file, skipping remux.", flush=True)
+        print("No manifest, skipping remux.", flush=True)
         return
     with open('download_manifest.json') as f:
         manifest = json.load(f)
@@ -312,41 +312,64 @@ def remux_videos():
         print("Manifest is empty, skipping remux.", flush=True)
         return
 
-    has_video = False
     for entry in manifest:
-        if not entry.get('is_youtube'):
-            continue
+        new_files = []
         for file_info in entry.get('files', []):
-            if file_info.get('type') == 'video':
-                has_video = True
-                break
-        if has_video:
-            break
-
-    if not has_video:
-        print("No video files found in manifest, skipping remux.", flush=True)
-        return
-
-    for entry in manifest:
-        if not entry.get('is_youtube'):
-            continue
-        for file_info in entry.get('files', []):
-            if file_info.get('type') != 'video':
-                continue
             fname = file_info['filename']
             src_path = os.path.join('temp_downloads', fname)
-            if not os.path.isfile(src_path):
-                print(f"Remux skipped: {fname} is not a file (directory?)", flush=True)
-                continue
-            os.chdir('temp_downloads')
-            print(f"Remuxing {fname}...", flush=True)
-            out = f"fixed_{fname}"
-            try:
-                subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
-                os.replace(out, fname)
-            except subprocess.CalledProcessError:
-                print(f"Remux failed for {fname}", flush=True)
-            os.chdir('..')
+            size = os.path.getsize(src_path) if os.path.isfile(src_path) else 0
+
+            is_video = False
+            if entry.get('is_youtube'):
+                if file_info.get('type') == 'video':
+                    is_video = True
+            else:
+                if file_info.get('type') == 'direct':
+                    probe = subprocess.run(['ffprobe', '-v', 'quiet', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', src_path],
+                                           capture_output=True, text=True)
+                    if probe.returncode == 0 and 'video' in probe.stdout:
+                        is_video = True
+
+            if is_video and size > 7 * 1024 * 1024 * 1024:
+                print(f"Splitting large video: {fname} ({size/1e9:.2f} GB)", flush=True)
+                dur_cmd = f'ffprobe -v error -select_streams v:0 -show_entries format=duration -of csv=p=0 "{src_path}"'
+                try:
+                    dur_str = subprocess.check_output(dur_cmd, shell=True).decode().strip()
+                    duration = float(dur_str)
+                except:
+                    print(f"Cannot get duration of {fname}, skipping split.")
+                    new_files.append(file_info)
+                    continue
+                half = duration / 2.0
+                base_name, ext = os.path.splitext(fname)
+                part1 = f"{base_name}_01{ext}"
+                part2 = f"{base_name}_02{ext}"
+
+                split_cmd = f'ffmpeg -hide_banner -loglevel warning -stats -i "{src_path}" -c copy -to {half} "temp_downloads/{part1}" -ss {half} -c copy "temp_downloads/{part2}" -y'
+                try:
+                    subprocess.run(split_cmd, shell=True, check=True)
+                    os.remove(src_path)
+                    new_files.append({'filename': part1, 'type': 'video' if entry.get('is_youtube') else 'direct'})
+                    new_files.append({'filename': part2, 'type': 'video' if entry.get('is_youtube') else 'direct'})
+                except subprocess.CalledProcessError:
+                    print(f"Split failed for {fname}, keeping original.")
+                    new_files.append(file_info)
+            else:
+                if is_video and os.path.isfile(src_path):
+                    os.chdir('temp_downloads')
+                    print(f"Remuxing {fname}...", flush=True)
+                    out = f"fixed_{fname}"
+                    try:
+                        subprocess.run(f'ffmpeg -hide_banner -loglevel warning -stats -i "{fname}" -c copy "{out}" -y', shell=True, check=True)
+                        os.replace(out, fname)
+                    except subprocess.CalledProcessError:
+                        print(f"Remux failed for {fname}", flush=True)
+                    os.chdir('..')
+                new_files.append(file_info)
+        entry['files'] = new_files
+
+    with open('download_manifest.json', 'w') as f:
+        json.dump(manifest, f, indent=2)
 
 def create_zips():
     if not os.path.exists('download_manifest.json'):
@@ -358,38 +381,26 @@ def create_zips():
         print("Manifest is empty, skipping ZIP.", flush=True)
         return
 
-    for pattern in ['tasks.txt', 'selected_formats.json', 'download_queue.json', 'download_manifest.json']:
-        try:
-            os.remove(pattern)
-        except OSError:
-            pass
-    for f in glob.glob('temp_*.json'):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
-
     os.makedirs('final_downloads', exist_ok=True)
     original_cwd = os.getcwd()
-    temp_downloads_abs = os.path.abspath('temp_downloads')
 
     for entry in manifest:
         if not entry.get('is_youtube'):
-            fname = entry['files'][0]['filename']
-            src = os.path.join(temp_downloads_abs, fname)
-            if not os.path.isfile(src):
-                print(f"Skipping ZIP for non-file: {fname}", flush=True)
-                continue
-            os.chdir('temp_downloads')
-            zip_name = f"../final_downloads/{fname}.zip"
-            try:
-                subprocess.run(f'zip -s 99m -j "{zip_name}" "{fname}"', shell=True, check=True)
-                os.remove(fname)
-            except subprocess.CalledProcessError:
-                print(f"ZIP failed for {fname}", flush=True)
-                if os.path.exists(fname):
+            for file_info in entry['files']:
+                fname = file_info['filename']
+                src = os.path.join('temp_downloads', fname)
+                if not os.path.isfile(src):
+                    print(f"Skipping ZIP for non-file: {fname}", flush=True)
+                    continue
+                os.chdir('temp_downloads')
+                try:
+                    subprocess.run(f'zip -s 99m -j "../final_downloads/{fname}.zip" "{fname}"', shell=True, check=True)
                     os.remove(fname)
-            os.chdir(original_cwd)
+                except subprocess.CalledProcessError:
+                    print(f"ZIP failed for {fname}", flush=True)
+                    if os.path.exists(fname):
+                        os.remove(fname)
+                os.chdir(original_cwd)
         else:
             title = entry['title']
             video_files = [f['filename'] for f in entry['files'] if f['type'] == 'video']
