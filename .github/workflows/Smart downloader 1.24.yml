@@ -69,7 +69,6 @@ jobs:
         run: python3 Logic.py --download
 
       - name: Remux (YouTube video only)
-        if: steps.parse.outputs.IS_YOUTUBE == 'true'
         run: python3 Logic.py --remux
 
       - name: Create ZIP & Split file
