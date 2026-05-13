@@ -224,7 +224,7 @@ def download_and_manifest(tasks_file):
         os.chdir('temp_downloads')
         tmp_name = 'downloaded_file.bin'
         try:
-            subprocess.run(f'wget --tries=3 -O "{tmp_name}" "{url}"', shell=True, check=True)
+            subprocess.run(f'wget --tries=3 --progress=dot:giga -O "{tmp_name}" "{url}"', shell=True, check=True)
             if os.path.exists(tmp_name):
                 manifest.append({
                     'url': url,
@@ -314,8 +314,6 @@ def remux_videos():
 
     video_count = 0
     for entry in manifest:
-        if not entry.get('is_youtube'):
-            continue
         new_files = []
         for file_info in entry.get('files', []):
             fname = file_info['filename']
@@ -325,33 +323,39 @@ def remux_videos():
                 new_files.append(file_info)
                 continue
             size = os.path.getsize(src_path)
-            is_video = (file_info.get('type') == 'video')
+            is_video = False
+            if entry.get('is_youtube'):
+                if file_info.get('type') == 'video':
+                    is_video = True
+            else:
+                if file_info.get('type') == 'direct':
+                    try:
+                        probe = subprocess.run(['ffprobe', '-v', 'quiet', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', src_path],
+                                               capture_output=True, text=True)
+                        if probe.returncode == 0 and 'video' in probe.stdout:
+                            is_video = True
+                    except:
+                        pass
 
             if is_video and size > 7 * 1024 * 1024 * 1024:
                 print(f"Splitting large video: {fname} ({size/1e9:.2f} GB)", flush=True)
-                dur_cmd = f'ffprobe -v error -select_streams v:0 -show_entries format=duration -of csv=p=0 "{src_path}"'
                 try:
+                    dur_cmd = f'ffprobe -v error -select_streams v:0 -show_entries format=duration -of csv=p=0 "{src_path}"'
                     dur_str = subprocess.check_output(dur_cmd, shell=True).decode().strip()
                     duration = float(dur_str)
-                except:
-                    print(f"Cannot get duration of {fname}, skipping split.", flush=True)
-                    new_files.append(file_info)
-                    continue
-                half = duration / 2.0
-                base_name, ext = os.path.splitext(fname)
-                part1 = f"{base_name}_01{ext}"
-                part2 = f"{base_name}_02{ext}"
-
-                split_cmd = f'ffmpeg -hide_banner -loglevel warning -stats -i "{src_path}" -c copy -to {half} "temp_downloads/{part1}" -ss {half} -c copy "temp_downloads/{part2}" -y'
-                try:
+                    half = duration / 2.0
+                    base_name, ext = os.path.splitext(fname)
+                    part1 = f"{base_name}_01{ext}"
+                    part2 = f"{base_name}_02{ext}"
+                    split_cmd = f'ffmpeg -hide_banner -loglevel warning -stats -i "{src_path}" -c copy -to {half} "temp_downloads/{part1}" -ss {half} -c copy "temp_downloads/{part2}" -y'
                     subprocess.run(split_cmd, shell=True, check=True)
                     os.remove(src_path)
-                    new_files.append({'filename': part1, 'type': 'video'})
-                    new_files.append({'filename': part2, 'type': 'video'})
+                    new_files.append({'filename': part1, 'type': 'video' if entry.get('is_youtube') else 'direct'})
+                    new_files.append({'filename': part2, 'type': 'video' if entry.get('is_youtube') else 'direct'})
                     video_count += 2
                     print(f"Split successful: {part1} + {part2}", flush=True)
-                except subprocess.CalledProcessError:
-                    print(f"Split failed for {fname}, keeping original.", flush=True)
+                except Exception as e:
+                    print(f"Split failed for {fname}: {e}", flush=True)
                     new_files.append(file_info)
             else:
                 if is_video:
